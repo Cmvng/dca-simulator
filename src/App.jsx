@@ -129,112 +129,177 @@ function rr(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y)
 function loadImg(src){return new Promise(res=>{const i=new Image();i.crossOrigin="anonymous";i.onload=()=>res(i);i.onerror=()=>res(null);i.src=src;});}
 
 async function makeCard({asset,sim,targetPct,months,freqId,userName,profileImg,analysis,livePrice}){
-  const W=1080,H=1920,cv=document.createElement("canvas");
+  // 1200x675 LANDSCAPE — fills X/Twitter feed perfectly
+  const W=1200,H=675,cv=document.createElement("canvas");
   cv.width=W;cv.height=H;const ctx=cv.getContext("2d");
   const freq=FREQS.find(f=>f.id===freqId);
   const good=analysis.score>=1;
   const totalInvested=sim.amtPer*sim.entries;
+  const LP=Math.round(W*0.38); // left panel width
 
-  // BG
-  ctx.fillStyle="#F7FDF9";ctx.fillRect(0,0,W,H);
-  ctx.fillStyle="rgba(187,247,208,0.35)";ctx.beginPath();ctx.arc(W+60,80,300,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle="rgba(187,247,208,0.2)";ctx.beginPath();ctx.arc(-60,H-160,260,0,Math.PI*2);ctx.fill();
+  // ── FULL BACKGROUND ──
+  ctx.fillStyle="#F0FDF4";ctx.fillRect(0,0,W,H);
 
-  // TOP BAR
-  ctx.fillStyle="#16A34A";ctx.fillRect(0,0,W,118);
-  ctx.fillStyle="#FFFFFF";ctx.font="bold 40px Arial";ctx.textAlign="left";ctx.fillText("CMVNG",52,68);
-  ctx.fillStyle="rgba(255,255,255,0.65)";ctx.font="24px Arial";ctx.fillText("DCA Simulator",52,100);
+  // ── LEFT GREEN PANEL ──
+  ctx.fillStyle="#16A34A";ctx.fillRect(0,0,LP,H);
+  // subtle circle decoration
+  ctx.fillStyle="rgba(255,255,255,0.07)";ctx.beginPath();ctx.arc(LP*0.1,H*0.85,180,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle="rgba(255,255,255,0.05)";ctx.beginPath();ctx.arc(LP*0.9,-40,160,0,Math.PI*2);ctx.fill();
 
-  if(profileImg){const img=await loadImg(profileImg);if(img){ctx.save();ctx.beginPath();ctx.arc(W-90,58,48,0,Math.PI*2);ctx.clip();ctx.drawImage(img,W-138,10,96,96);ctx.restore();ctx.strokeStyle="#FFFFFF";ctx.lineWidth=3;ctx.beginPath();ctx.arc(W-90,58,48,0,Math.PI*2);ctx.stroke();}}
-  if(userName){ctx.fillStyle="#FFFFFF";ctx.font="bold 26px Arial";ctx.textAlign="right";ctx.fillText(userName,profileImg?W-156:W-52,62);}
+  // CMVNG brand top-left
+  ctx.fillStyle="rgba(255,255,255,0.9)";ctx.font="bold 28px Arial";ctx.textAlign="left";
+  ctx.fillText("CMVNG",32,46);
+  ctx.fillStyle="rgba(255,255,255,0.5)";ctx.font="16px Arial";
+  ctx.fillText("DCA Simulator",32,68);
 
-  let y=138;
+  // Coin logo circle
+  const logoY=H/2-70;
+  if(asset.image){const logo=await loadImg(asset.image);if(logo){ctx.save();ctx.beginPath();ctx.arc(LP/2,logoY,52,0,Math.PI*2);ctx.clip();ctx.drawImage(logo,LP/2-52,logoY-52,104,104);ctx.restore();}}
+  else{ctx.fillStyle="rgba(255,255,255,0.2)";ctx.beginPath();ctx.arc(LP/2,logoY,52,0,Math.PI*2);ctx.fill();}
+  // coin ring
+  ctx.strokeStyle="rgba(255,255,255,0.3)";ctx.lineWidth=3;ctx.beginPath();ctx.arc(LP/2,logoY,58,0,Math.PI*2);ctx.stroke();
 
-  // ASSET ROW
-  rr(ctx,40,y,W-80,160,20);ctx.fillStyle="#FFFFFF";ctx.fill();ctx.strokeStyle="#BBF7D0";ctx.lineWidth=2;ctx.stroke();
-  if(asset.image){const logo=await loadImg(asset.image);if(logo){ctx.save();ctx.beginPath();ctx.arc(114,y+80,48,0,Math.PI*2);ctx.clip();ctx.drawImage(logo,66,y+32,96,96);ctx.restore();}}
-  ctx.fillStyle="#052E16";ctx.font="bold 64px Arial";ctx.textAlign="left";ctx.fillText(asset.symbol.toUpperCase(),188,y+88);
-  ctx.fillStyle="#6B7280";ctx.font="26px Arial";ctx.fillText(asset.name,188,y+128);
-  const lp=livePrice?.price||asset.current_price;
-  ctx.fillStyle="#16A34A";ctx.font="bold 32px Arial";ctx.textAlign="right";ctx.fillText(fmtPrice(lp),W-52,y+82);
-  if(livePrice?.change24h!==undefined){const c=livePrice.change24h;ctx.fillStyle=c>=0?"#16A34A":"#DC2626";ctx.font="24px Arial";ctx.fillText(`${fmtPct(c)} 24h`,W-52,y+122);}
+  // Coin symbol big
+  ctx.fillStyle="#FFFFFF";ctx.font="bold 64px Arial";ctx.textAlign="center";
+  ctx.fillText(asset.symbol.toUpperCase(),LP/2,logoY+110);
 
-  y+=186;
+  // Coin full name
+  ctx.fillStyle="rgba(255,255,255,0.65)";ctx.font="20px Arial";
+  ctx.fillText(asset.name,LP/2,logoY+140);
 
-  // VERDICT
-  const vc=analysis.verdictColor;
-  rr(ctx,40,y,W-80,112,18);ctx.fillStyle=analysis.verdictBg;ctx.fill();ctx.strokeStyle=vc+"80";ctx.lineWidth=2;ctx.stroke();
-  const icon=analysis.score>=3?"🔥":analysis.score>=1?"✅":analysis.score>=-1?"⚠️":"❌";
-  ctx.font="36px Arial";ctx.textAlign="left";ctx.fillText(icon,58,y+58);
-  ctx.fillStyle=vc;ctx.font="bold 30px Arial";ctx.fillText(`SETUP: ${analysis.verdict.toUpperCase()}`,112,y+48);
-  ctx.fillStyle="#374151";ctx.font="22px Arial";
-  const desc=analysis.verdictDesc;ctx.fillText(desc.length>72?desc.slice(0,72)+"…":desc,112,y+84);
+  // Live price
+  const liveP=livePrice?.price||asset.current_price;
+  ctx.fillStyle="#FFFFFF";ctx.font="bold 30px Arial";
+  ctx.fillText(fmtPrice(liveP),LP/2,logoY+180);
 
-  y+=138;
-
-  // STRATEGY BANNER
-  const sg=ctx.createLinearGradient(40,y,W-40,y+190);sg.addColorStop(0,"#16A34A");sg.addColorStop(1,"#14532D");
-  rr(ctx,40,y,W-80,190,20);ctx.fillStyle=sg;ctx.fill();
-  ctx.fillStyle="rgba(255,255,255,0.08)";ctx.beginPath();ctx.arc(W-80,y+95,150,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle="rgba(255,255,255,0.7)";ctx.font="24px Arial";ctx.textAlign="left";ctx.fillText("MY DCA PLAN",58,y+40);
-  ctx.fillStyle="#FFFFFF";ctx.font="bold 44px Arial";
-  const mainLine=`${fmtUSD(sim.amtPer)} ${freq.label.toLowerCase()} into ${asset.symbol.toUpperCase()}`;
-  ctx.fillText(mainLine.length>38?mainLine.slice(0,38)+"…":mainLine,58,y+96);
-  ctx.fillStyle="rgba(255,255,255,0.8)";ctx.font="26px Arial";
-  ctx.fillText(`${months} month${months>1?"s":""}  ·  ${sim.entries} purchases  ·  ${fmtUSD(totalInvested)} total in`,58,y+144);
-  ctx.fillStyle="rgba(255,255,255,0.55)";ctx.font="22px Arial";
-  ctx.fillText(`Avg buy price: ${fmtPrice(sim.avgEntry)}  ·  ${fmtTok(sim.totalTokens)} ${asset.symbol.toUpperCase()} total`,58,y+180);
-
-  y+=216;
-
-  // MAIN RESULT
-  rr(ctx,40,y,W-80,250,20);
-  ctx.fillStyle=good?"#F0FDF4":"#FEF2F2";ctx.fill();
-  ctx.strokeStyle=good?"#4ADE80":"#FCA5A5";ctx.lineWidth=3;ctx.stroke();
-  ctx.textAlign="left";
-  ctx.fillStyle=good?"#16A34A":"#DC2626";ctx.font="bold 28px Arial";
-  ctx.fillText(`IF ${asset.symbol.toUpperCase()} REACHES ${fmtPrice(sim.targetPrice)} (+${targetPct}%)`,58,y+46);
-  ctx.fillStyle="#052E16";ctx.font="bold 100px Arial";ctx.fillText(fmtUSD(sim.targetVal),58,y+160);
-  ctx.fillStyle=good?"#16A34A":"#DC2626";ctx.font="bold 38px Arial";
-  ctx.fillText(`You profit: +${fmtUSD(sim.targetProfit)}`,58,y+212);
-  rr(ctx,W-230,y+18,182,66,33);ctx.fillStyle=good?"#16A34A":"#DC2626";ctx.fill();
-  ctx.fillStyle="#FFFFFF";ctx.font="bold 38px Arial";ctx.textAlign="center";ctx.fillText(`+${targetPct}%`,W-139,y+62);
-
-  y+=276;
-
-  // SCENARIOS
-  ctx.fillStyle="#374151";ctx.font="bold 26px Arial";ctx.textAlign="left";
-  ctx.fillText("WHAT ELSE COULD HAPPEN?",40,y+4);y+=34;
-
-  const scs=[
-    {label:"Price stays flat",detail:`${fmtUSD(totalInvested)} in → ${fmtUSD(sim.flatVal)} out`,sub:"break even",color:G.amber,bg:G.amberPale,brd:G.amberBorder},
-    {label:`Price drops 20% → ${fmtPrice(sim.avgEntry*0.8)}`,detail:`${fmtUSD(totalInvested)} in → ${fmtUSD(sim.downVal)} out`,sub:`−${fmtUSD(Math.abs(sim.downLoss))}`,color:"#EF4444",bg:"#FEF2F2",brd:"#FECACA"},
-    {label:`Price crashes 50% → ${fmtPrice(sim.avgEntry*0.5)}`,detail:`${fmtUSD(totalInvested)} in → ${fmtUSD(sim.down50Val)} out`,sub:`−${fmtUSD(Math.abs(sim.down50Loss))}`,color:"#9F1239",bg:"#FFF1F2",brd:"#FDA4AF"},
-  ];
-  for(const sc of scs){
-    rr(ctx,40,y,W-80,126,16);ctx.fillStyle=sc.bg;ctx.fill();ctx.strokeStyle=sc.brd;ctx.lineWidth=1.5;ctx.stroke();
-    ctx.fillStyle=sc.color;ctx.font="bold 24px Arial";ctx.textAlign="left";ctx.fillText(sc.label,58,y+38);
-    ctx.fillStyle="#374151";ctx.font="26px Arial";ctx.fillText(sc.detail,58,y+76);
-    ctx.fillStyle=sc.color;ctx.font="bold 28px Arial";ctx.textAlign="right";ctx.fillText(sc.sub,W-58,y+76);
-    y+=144;
+  // 24h change pill area
+  if(livePrice?.change24h!==undefined){
+    const chg=livePrice.change24h;const up=chg>=0;
+    const chgTxt=`${fmtPct(chg)} today`;
+    const tw=ctx.measureText(chgTxt).width+24;
+    rr(ctx,LP/2-tw/2,logoY+195,tw,30,15);
+    ctx.fillStyle=up?"rgba(255,255,255,0.25)":"rgba(220,38,38,0.5)";ctx.fill();
+    ctx.fillStyle="#FFFFFF";ctx.font="bold 16px Arial";
+    ctx.fillText(chgTxt,LP/2,logoY+215);
   }
 
-  // CURRENT VALUE
-  rr(ctx,40,y,W-80,100,16);ctx.fillStyle="#F8FAFC";ctx.fill();ctx.strokeStyle=G.border;ctx.lineWidth=1.5;ctx.stroke();
-  ctx.fillStyle="#6B7280";ctx.font="22px Arial";ctx.textAlign="left";ctx.fillText(`AT TODAY'S LIVE PRICE (${fmtPrice(sim.refPrice)})`,58,y+36);
-  const curPnl=sim.currentVal-totalInvested;
-  ctx.fillStyle=curPnl>=0?"#16A34A":"#DC2626";ctx.font="bold 36px Arial";
-  ctx.fillText(`${fmtUSD(sim.currentVal)}  (${fmtPct(sim.currentROI)})`,58,y+80);
+  // Trend badge bottom of left panel
+  const trendColor=analysis.trend==="Uptrend"?"#4ADE80":analysis.trend==="Downtrend"?"#FCA5A5":"#FDE68A";
+  ctx.fillStyle=trendColor;ctx.font="bold 18px Arial";ctx.textAlign="center";
+  ctx.fillText(analysis.trend.toUpperCase(),LP/2,H-60);
 
-  y+=120;
+  // Setup verdict
+  const verdictIcon=analysis.score>=3?"STRONG SETUP":analysis.score>=1?"DECENT SETUP":analysis.score>=-1?"MIXED SIGNALS":"WEAK SETUP";
+  ctx.fillStyle="rgba(255,255,255,0.55)";ctx.font="14px Arial";
+  ctx.fillText(verdictIcon,LP/2,H-38);
 
-  ctx.fillStyle="#9CA3AF";ctx.font="20px Arial";ctx.textAlign="center";
-  ctx.fillText("Not financial advice. DYOR. Past data ≠ future results.",W/2,y+20);
+  // User name + photo — bottom left corner
+  if(userName||profileImg){
+    let px=32,py=H-70;
+    if(profileImg){
+      const pimg=await loadImg(profileImg);
+      if(pimg){ctx.save();ctx.beginPath();ctx.arc(px+20,py+20,20,0,Math.PI*2);ctx.clip();ctx.drawImage(pimg,px,py,40,40);ctx.restore();ctx.strokeStyle="rgba(255,255,255,0.6)";ctx.lineWidth=2;ctx.beginPath();ctx.arc(px+20,py+20,20,0,Math.PI*2);ctx.stroke();}
+      px+=48;
+    }
+    if(userName){ctx.fillStyle="#FFFFFF";ctx.font="bold 18px Arial";ctx.textAlign="left";ctx.fillText(userName,px,py+14);ctx.fillStyle="rgba(255,255,255,0.5)";ctx.font="13px Arial";ctx.fillText("DCA Strategy",px,py+32);}
+  }
 
-  const fy=H-128;ctx.fillStyle="#16A34A";ctx.fillRect(0,fy,W,128);
-  ctx.fillStyle="#FFFFFF";ctx.font="bold 44px Arial";ctx.textAlign="center";ctx.fillText("CMVNG DCA SIMULATOR",W/2,fy+56);
-  ctx.fillStyle="rgba(255,255,255,0.65)";ctx.font="24px Arial";
-  ctx.fillText(`cmvng.app  ·  #CMVNG  ·  #DCA  ·  #${asset.symbol.toUpperCase()}  ·  #Crypto`,W/2,fy+100);
+  // ── RIGHT WHITE PANEL ──
+  const RX=LP+1; // right panel starts here
+  const RW=W-LP;
+  const PAD=40;
+
+  // Plan summary row at top
+  ctx.fillStyle="#052E16";ctx.font="bold 17px Arial";ctx.textAlign="left";
+  ctx.fillText("MY DCA PLAN",RX+PAD,50);
+
+  const planTxt=`${fmtUSD(sim.amtPer)} ${freq.label.toLowerCase()} · ${months} month${months>1?"s":""} · ${sim.entries} buys · ${fmtUSD(totalInvested)} total in`;
+  ctx.fillStyle="#6B7280";ctx.font="15px Arial";
+  ctx.fillText(planTxt,RX+PAD,74);
+
+  // thin separator
+  ctx.strokeStyle="#E2F5E9";ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(RX+PAD,88);ctx.lineTo(W-PAD,88);ctx.stroke();
+
+  // ── MAIN TARGET BLOCK ──
+  const good2=analysis.score>=1;
+  ctx.fillStyle=good2?"#16A34A":"#DC2626";ctx.font="bold 15px Arial";ctx.textAlign="left";
+  ctx.fillText(`IF ${asset.symbol.toUpperCase()} HITS +${targetPct}% → ${fmtPrice(sim.targetPrice)}`,RX+PAD,118);
+
+  // BIG MONEY NUMBER
+  ctx.fillStyle="#052E16";ctx.font="bold 88px Arial";ctx.textAlign="left";
+  const bigMoney=fmtUSD(sim.targetVal);
+  ctx.fillText(bigMoney,RX+PAD,210);
+
+  // profit line
+  ctx.fillStyle=good2?"#16A34A":"#DC2626";ctx.font="bold 22px Arial";
+  ctx.fillText(`Profit: +${fmtUSD(sim.targetProfit)}`,RX+PAD,244);
+
+  // ROI pill
+  const roiTxt=`+${sim.targetROI.toFixed(0)}% return`;
+  const roiW=ctx.measureText(roiTxt).width+28;
+  rr(ctx,RX+PAD+ctx.measureText(`Profit: +${fmtUSD(sim.targetProfit)}`).width+16,222,roiW,32,16);
+  ctx.fillStyle=good2?"#16A34A":"#DC2626";ctx.fill();
+  ctx.fillStyle="#FFFFFF";ctx.font="bold 16px Arial";ctx.textAlign="left";
+  ctx.fillText(roiTxt,RX+PAD+ctx.measureText(`Profit: +${fmtUSD(sim.targetProfit)}`).width+30,243);
+
+  // separator
+  ctx.strokeStyle="#E2F5E9";ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(RX+PAD,264);ctx.lineTo(W-PAD,264);ctx.stroke();
+
+  // ── 3 SCENARIO COLUMNS ──
+  ctx.fillStyle="#9CA3AF";ctx.font="bold 12px Arial";ctx.textAlign="left";
+  ctx.fillText("OTHER SCENARIOS",RX+PAD,288);
+
+  const cols=3;const colW=(RW-PAD*2)/cols;
+  const scenarios=[
+    {label:"Price stays flat",val:sim.flatVal,change:"±0%",loss:"Breakeven",c:"#B45309",bg:"#FFFBEB",brd:"#FDE68A"},
+    {label:`Drops 20% → ${fmtPrice(sim.avgEntry*0.8)}`,val:sim.downVal,change:"-20%",loss:`−${fmtUSD(Math.abs(sim.downLoss))}`,c:"#DC2626",bg:"#FEF2F2",brd:"#FECACA"},
+    {label:`Crashes 50% → ${fmtPrice(sim.avgEntry*0.5)}`,val:sim.down50Val,change:"-50%",loss:`−${fmtUSD(Math.abs(sim.down50Loss))}`,c:"#9F1239",bg:"#FFF1F2",brd:"#FDA4AF"},
+  ];
+  scenarios.forEach((sc,i)=>{
+    const sx=RX+PAD+i*colW;const sy=298;const sw=colW-10;const sh=140;
+    rr(ctx,sx,sy,sw,sh,12);ctx.fillStyle=sc.bg;ctx.fill();ctx.strokeStyle=sc.brd;ctx.lineWidth=1.5;ctx.stroke();
+    ctx.fillStyle=sc.c;ctx.font="bold 12px Arial";ctx.textAlign="left";
+    // wrap label if needed
+    const lbl=sc.label.length>26?sc.label.slice(0,26)+"…":sc.label;
+    ctx.fillText(lbl,sx+12,sy+24);
+    ctx.fillStyle="#052E16";ctx.font="bold 30px Arial";
+    ctx.fillText(fmtUSD(sc.val),sx+12,sy+70);
+    ctx.fillStyle=sc.c;ctx.font="bold 16px Arial";
+    ctx.fillText(sc.change,sx+12,sy+98);
+    ctx.fillStyle="#6B7280";ctx.font="14px Arial";
+    ctx.fillText(sc.loss,sx+12,sy+118);
+  });
+
+  // ── CURRENT VALUE + AVG ENTRY ROW ──
+  const infoY=456;
+  rr(ctx,RX+PAD,infoY,RW-PAD*2,58,10);
+  ctx.fillStyle="#F8FAFC";ctx.fill();ctx.strokeStyle="#E2F5E9";ctx.lineWidth=1;ctx.stroke();
+
+  ctx.fillStyle="#9CA3AF";ctx.font="bold 12px Arial";ctx.textAlign="left";
+  ctx.fillText("VALUE AT LIVE PRICE",RX+PAD+14,infoY+20);
+  ctx.fillStyle="#052E16";ctx.font="bold 22px Arial";
+  ctx.fillText(fmtUSD(sim.currentVal),RX+PAD+14,infoY+46);
+
+  const mid=RX+PAD+(RW-PAD*2)/2;
+  ctx.strokeStyle="#E2F5E9";ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(mid,infoY+8);ctx.lineTo(mid,infoY+50);ctx.stroke();
+
+  ctx.fillStyle="#9CA3AF";ctx.font="bold 12px Arial";ctx.textAlign="left";
+  ctx.fillText("AVG ENTRY PRICE",mid+14,infoY+20);
+  ctx.fillStyle="#052E16";ctx.font="bold 22px Arial";
+  ctx.fillText(fmtPrice(sim.avgEntry),mid+14,infoY+46);
+
+  // ── FOOTER ──
+  ctx.fillStyle="#CBD5E1";ctx.font="13px Arial";ctx.textAlign="left";
+  ctx.fillText("Not financial advice · DYOR",RX+PAD,H-18);
+  ctx.fillStyle="#16A34A";ctx.font="bold 13px Arial";ctx.textAlign="right";
+  ctx.fillText("cmvng.app",W-PAD,H-18);
+
+  // left panel bottom line
+  ctx.fillStyle="rgba(255,255,255,0.25)";ctx.font="12px Arial";ctx.textAlign="center";
+  ctx.fillText("Not financial advice · DYOR",LP/2,H-18);
 
   return cv.toDataURL("image/png");
 }
@@ -554,9 +619,9 @@ export default function App(){
 
               {cardUrl&&<>
                 <img src={cardUrl} alt="Share card" style={{width:"100%",borderRadius:14,marginBottom:12,border:`1px solid ${G.border}`}}/>
-                <button onClick={()=>{const a=document.createElement("a");a.href=cardUrl;a.download=`cmvng-${selected.symbol}-dca.png`;a.click();}}
+                <button onClick={()=>{const a=document.createElement("a");a.href=cardUrl;a.download=`cmvng-${selected.symbol}-dca-x.png`;a.click();}}
                   style={{width:"100%",padding:"13px",borderRadius:12,cursor:"pointer",fontFamily:"inherit",fontSize:15,fontWeight:800,border:`2px solid ${G.green}`,background:G.greenPale,color:G.green}}>
-                  ⬇ Download · Ready for X & Instagram
+                  ⬇ Download · Optimised for X & all platforms
                 </button>
               </>}
             </div>
