@@ -1,22 +1,33 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
-// ─── STABLECOINS + WRAPPED ASSETS BLACKLIST ───────────────────────────────────
+// ─── STABLECOINS + WRAPPED ASSETS BLACKLIST (comprehensive) ─────────────────────
 const STABLE = new Set([
+  // USD-pegged stablecoins
   "tether","usd-coin","binance-usd","dai","true-usd","frax","usdp","neutrino",
   "gemini-dollar","liquity-usd","fei-usd","usdd","celo-dollar","terraclassicusd",
   "paxos-standard","nusd","flex-usd","usdk","husd","usdx","vai","susd","musd",
   "dola-usd","origin-dollar","usdn","sperax-usd","paypal-usd","first-digital-usd",
   "usde","ethena-usde","usdy","mountain-protocol-usdm","ondo-us-dollar-yield",
-  "stasis-eurs","ageur","eurc","euro-coin","tether-eurt","steur","usdb",
+  "usdb","reserve-rights-token","volt-protocol","float-protocol","fei-protocol",
+  "frax-share","terra-luna-2","terrausd","tribe","gyroscope-gyd","crvusd",
+  "gho","aave-v3-usdc","raft","deusd","lvusd","letus","zunusd","eura",
+  "money-market-hedge","mkr","vesta-finance","e-money","djed",
+  // EUR/GBP pegged
+  "stasis-eurs","ageur","eurc","euro-coin","tether-eurt","steur","eurs",
+  // Wrapped & liquid staking (not real coins — just wrappers)
   "wrapped-bitcoin","wrapped-ethereum","staked-ether","rocket-pool-eth",
   "lido-staked-ether","coinbase-wrapped-staked-eth","mantle-staked-ether",
   "stakewise-v3-oseth","frax-ether","stakehound-staked-ether","wrapped-steth",
   "weth","wbtc","weeth","reth","cbeth","sfrxeth","ankr-staked-eth",
+  "sweth","meth","rseth","ezeth","pufeth","apxeth","woeth",
+  "wrapped-avax","wrapped-bnb","wrapped-fantom","wrapped-matic","wrapped-near",
+  "bridged-usdc-polygon-pos-bridge","bridged-usdt",
 ]);
 
+// All frequencies now support up to 6 months max
 const FREQS = [
-  { id:"12h",      label:"Every 12h", days:0.5, maxMonths:2 },
-  { id:"daily",    label:"Daily",     days:1,   maxMonths:4 },
+  { id:"12h",      label:"Every 12h", days:0.5, maxMonths:6 },
+  { id:"daily",    label:"Daily",     days:1,   maxMonths:6 },
   { id:"weekly",   label:"Weekly",    days:7,   maxMonths:6 },
   { id:"biweekly", label:"Bi-weekly", days:14,  maxMonths:6 },
 ];
@@ -125,29 +136,66 @@ function smooth(prices, w=3) {
 
 function runSim({ capital, freqId, months, targetPct, prices, livePrice }) {
   const freq = FREQS.find(f=>f.id===freqId);
-  const entries = Math.min(120, Math.max(4, Math.round((months*30)/freq.days)));
+  const entries = Math.min(180, Math.max(4, Math.round((months*30)/freq.days)));
   const amtPer = capital/entries;
-  // ALWAYS anchor to live price — this is what the user sees today.
-  // Historical prices only used to model relative volatility spread.
+
+  // Live price is the anchor — always what user sees right now
   const anchorPrice = livePrice || prices[prices.length-1][1];
-  const sm = smooth(prices);
-  const midIdx = Math.floor(sm.length/2);
-  const midVal = sm[midIdx] || anchorPrice;
-  const step = Math.max(1, Math.floor(sm.length/entries));
-  // Simulate future entries using historical volatility ratios centred on today
+
+  // ── VOLATILITY WINDOW MATCHES CHOSEN DURATION ──────────────────────────────
+  // If user picks 3 months → use last 90 days of price data
+  // If user picks 1 month  → use last 30 days of price data
+  // This means the volatility and price range used for simulation
+  // reflects exactly the same period the user is planning to DCA over.
+  const windowDays = months * 30;
+  const allVals = prices.map(p=>p[1]);
+  // Each CoinGecko daily point = 1 day. Slice the last N days.
+  const windowVals = allVals.slice(-windowDays);
+  const windowPrices = windowVals.length >= 4 ? windowVals : allVals;
+
+  // ── VOLATILITY from the chosen window ──────────────────────────────────────
+  const windowAvg = avg(windowPrices);
+  const windowStd = std(windowPrices);
+  const windowMin = Math.min(...windowPrices);
+  const windowMax = Math.max(...windowPrices);
+  // Volatility as % of the window average price
+  const volPct = (windowStd / windowAvg);
+
+  // ── SIMULATE ENTRY PRICES ──────────────────────────────────────────────────
+  // We take the actual historical prices from the window and scale them
+  // so they are centred on today's live price.
+  // This preserves the real shape of price movement (dips, peaks, patterns)
+  // but anchors the whole range to where the coin is trading NOW.
+  //
+  // Example: window had prices from $30–$50 with avg $40, live price = $60
+  //   → each historical price is scaled by (60/40) = 1.5
+  //   → so the simulated range becomes $45–$75 centred on $60
+  //
+  // This is honest: it uses the actual volatility of the chosen period
+  // but does not use stale absolute prices as entry points.
+  const scaleFactor = anchorPrice / (windowAvg || anchorPrice);
+  const step = Math.max(1, Math.floor(windowPrices.length / entries));
   const entryPrices = Array.from({length:entries}, (_,i) => {
-    const idx = Math.min(midIdx + i*step, sm.length-1);
-    const ratio = sm[idx] / midVal;
-    return Math.max(anchorPrice * ratio, anchorPrice * 0.01);
+    const idx = Math.min(i * step, windowPrices.length - 1);
+    const scaled = windowPrices[idx] * scaleFactor;
+    return Math.max(scaled, anchorPrice * 0.01);
   });
+
   const totalTokens = entryPrices.reduce((s,p)=>s+amtPer/p, 0);
   const avgEntry = capital/totalTokens;
   const refPrice = anchorPrice;
+
+  // Target, flat and downside all calculated from LIVE PRICE (not avg entry)
   const targetPrice = refPrice*(1+targetPct/100);
   const targetVal = totalTokens*targetPrice;
   const currentVal = totalTokens*refPrice;
   const downVal = totalTokens*(refPrice*0.8);
   const down50Val = totalTokens*(refPrice*0.5);
+
+  // Expose window stats for display
+  const simLow  = Math.min(...entryPrices);
+  const simHigh = Math.max(...entryPrices);
+
   return {
     entries, amtPer, avgEntry, totalTokens, refPrice,
     targetPrice, targetVal,
@@ -157,6 +205,7 @@ function runSim({ capital, freqId, months, targetPct, prices, livePrice }) {
     flatVal: capital,
     downVal, downLoss: downVal-capital,
     down50Val, down50Loss: down50Val-capital,
+    simLow, simHigh, volPct: volPct*100, windowDays,
   };
 }
 
@@ -763,7 +812,7 @@ export default function App() {
               ))}
             </div>
             <div style={{fontSize:12,color:G.muted,marginTop:6}}>
-              Max {freq.maxMonths} months · Each buy: <strong>{fmtUSD(Number(capital)/Math.max(4,Math.round((safeMo*30)/freq.days)))}</strong>
+              All frequencies support up to 6 months · Each buy: <strong>{fmtUSD(Number(capital)/Math.max(4,Math.round((safeMo*30)/freq.days)))}</strong>
             </div>
           </div>
 
@@ -853,13 +902,23 @@ export default function App() {
               {/* BREAKDOWN */}
               <div style={card}>
                 <div style={secLabel}>Your DCA Breakdown</div>
+                {/* Volatility window info box */}
+                <div style={{background:G.surfaceAlt,borderRadius:10,padding:"10px 14px",marginBottom:14,border:`1px solid ${G.border}`}}>
+                  <div style={{fontSize:12,fontWeight:700,color:G.sub,marginBottom:4}}>How entries were calculated</div>
+                  <div style={{fontSize:13,color:G.muted,lineHeight:1.6}}>
+                    Used the last <strong style={{color:G.text}}>{sim.windowDays} days</strong> of price data ({safeMo} month{safeMo!==1?"s":""}) to model your entry prices.
+                    During that window the price ranged from <strong style={{color:G.text}}>{fmtPrice(sim.simLow)}</strong> to <strong style={{color:G.text}}>{fmtPrice(sim.simHigh)}</strong> (volatility: {sim.volPct.toFixed(1)}%).
+                    That range is scaled to today's live price of <strong style={{color:G.text}}>{fmtPrice(sim.refPrice)}</strong> to simulate realistic future entries.
+                  </div>
+                </div>
                 {[
                   ["You buy",`${fmtUSD(sim.amtPer)} per purchase`],
                   ["Number of purchases",`${sim.entries} times`],
                   ["Total money in",fmtUSD(totalInvested)],
-                  ["Average buy price",fmtPrice(sim.avgEntry)],
-                  [`Total ${selected.symbol.toUpperCase()} you'll own`,fmtTok(sim.totalTokens)],
-                  ["Value right now",<span style={{color:sim.currentROI>=0?G.green:G.red}}>{fmtUSD(sim.currentVal)} ({fmtPct(sim.currentROI)})</span>],
+                  ["Entry price range",`${fmtPrice(sim.simLow)} – ${fmtPrice(sim.simHigh)}`],
+                  ["Avg entry (vol-adjusted)",<span style={{color:sim.avgEntry<=sim.refPrice?G.green:G.amber,fontWeight:700}}>{fmtPrice(sim.avgEntry)} {sim.avgEntry<sim.refPrice?"(below live ↓)":"(above live ↑)"}</span>],
+                  [`Total ${selected.symbol.toUpperCase()} accumulated`,fmtTok(sim.totalTokens)],
+                  ["Value right now",<span style={{color:sim.currentROI>=0?G.green:G.red,fontWeight:700}}>{fmtUSD(sim.currentVal)} ({fmtPct(sim.currentROI)})</span>],
                 ].map(([l,v],i,a)=>(
                   <div key={l} style={{...statRow,borderBottom:i<a.length-1?`1px solid ${G.border}`:"none"}}>
                     <span style={{fontSize:14,color:G.muted}}>{l}</span>
