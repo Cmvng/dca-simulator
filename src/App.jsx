@@ -127,17 +127,27 @@ function runSim({ capital, freqId, months, targetPct, prices, livePrice }) {
   const freq = FREQS.find(f=>f.id===freqId);
   const entries = Math.min(120, Math.max(4, Math.round((months*30)/freq.days)));
   const amtPer = capital/entries;
+  // ALWAYS anchor to live price — this is what the user sees today.
+  // Historical prices only used to model relative volatility spread.
+  const anchorPrice = livePrice || prices[prices.length-1][1];
   const sm = smooth(prices);
+  const midIdx = Math.floor(sm.length/2);
+  const midVal = sm[midIdx] || anchorPrice;
   const step = Math.max(1, Math.floor(sm.length/entries));
-  const entryPrices = Array.from({length:entries}, (_,i)=>sm[Math.min(i*step,sm.length-1)]);
+  // Simulate future entries using historical volatility ratios centred on today
+  const entryPrices = Array.from({length:entries}, (_,i) => {
+    const idx = Math.min(midIdx + i*step, sm.length-1);
+    const ratio = sm[idx] / midVal;
+    return Math.max(anchorPrice * ratio, anchorPrice * 0.01);
+  });
   const totalTokens = entryPrices.reduce((s,p)=>s+amtPer/p, 0);
   const avgEntry = capital/totalTokens;
-  const refPrice = livePrice || prices[prices.length-1][1];
-  const targetPrice = avgEntry*(1+targetPct/100);
+  const refPrice = anchorPrice;
+  const targetPrice = refPrice*(1+targetPct/100);
   const targetVal = totalTokens*targetPrice;
   const currentVal = totalTokens*refPrice;
-  const downVal = totalTokens*(avgEntry*0.8);
-  const down50Val = totalTokens*(avgEntry*0.5);
+  const downVal = totalTokens*(refPrice*0.8);
+  const down50Val = totalTokens*(refPrice*0.5);
   return {
     entries, amtPer, avgEntry, totalTokens, refPrice,
     targetPrice, targetVal,
@@ -151,7 +161,12 @@ function runSim({ capital, freqId, months, targetPct, prices, livePrice }) {
 }
 
 // ─── FORMAT ───────────────────────────────────────────────────────────────────
-const fmtUSD = n => { const a=Math.abs(n),s=n<0?"-":""; return a>=1e6?`${s}$${(a/1e6).toFixed(2)}M`:a>=1e3?`${s}$${(a/1e3).toFixed(1)}K`:`${s}$${a.toFixed(2)}`; };
+const fmtUSD = n => {
+  const a=Math.abs(n), s=n<0?"-":"";
+  if (a>=1e6) return `${s}$${(a/1e6).toFixed(2)}M`;
+  if (a>=1e3) return `${s}$${a.toLocaleString("en-US",{minimumFractionDigits:0,maximumFractionDigits:0})}`;
+  return `${s}$${a.toFixed(2)}`;
+};
 const fmtPrice = n => n>=1000?`$${n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:n>=1?`$${n.toFixed(2)}`:`$${n.toPrecision(4)}`;
 const fmtPct = n => `${n>=0?"+":""}${n.toFixed(1)}%`;
 const fmtTok = n => n<0.001?n.toFixed(8):n<1?n.toFixed(4):n<1000?n.toFixed(3):n.toFixed(1);
@@ -175,80 +190,103 @@ async function makeCard({ asset, sim, targetPct, months, freqId, userName, profi
 
   // ── LEFT GREEN PANEL ──
   ctx.fillStyle="#16A34A"; ctx.fillRect(0,0,LP,H);
-  // decorative circles
-  ctx.fillStyle="rgba(255,255,255,0.06)"; ctx.beginPath(); ctx.arc(LP*0.15,H*0.88,200,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle="rgba(255,255,255,0.04)"; ctx.beginPath(); ctx.arc(LP*0.85,-30,170,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle="rgba(255,255,255,0.05)"; ctx.beginPath(); ctx.arc(LP*0.1,H*0.9,220,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle="rgba(255,255,255,0.04)"; ctx.beginPath(); ctx.arc(LP*0.9,-20,180,0,Math.PI*2); ctx.fill();
 
-  // brand
-  ctx.fillStyle="rgba(255,255,255,0.95)"; ctx.font="bold 26px Arial"; ctx.textAlign="left";
-  ctx.fillText("CMVNG", 28, 44);
-  ctx.fillStyle="rgba(255,255,255,0.45)"; ctx.font="14px Arial";
-  ctx.fillText("DCA Simulator", 28, 62);
+  // CMVNG brand top-left
+  ctx.fillStyle="rgba(255,255,255,0.95)"; ctx.font="bold 24px Arial"; ctx.textAlign="left";
+  ctx.fillText("CMVNG", 24, 40);
+  ctx.fillStyle="rgba(255,255,255,0.4)"; ctx.font="13px Arial";
+  ctx.fillText("DCA Simulator", 24, 58);
 
-  // coin logo
-  const logoY = H/2 - 80;
-  if (asset.image) {
-    const logo = await loadImg(asset.image);
-    if (logo) {
-      ctx.save(); ctx.beginPath(); ctx.arc(LP/2,logoY,54,0,Math.PI*2); ctx.clip();
-      ctx.drawImage(logo,LP/2-54,logoY-54,108,108); ctx.restore();
+  const liveP = livePrice?.price || asset.current_price;
+  const panelCX = LP/2;
+
+  // ── LARGE PFP — top half of left panel ──
+  if (profileImg) {
+    const PFP_R = 80; // radius — large and prominent
+    const PFP_Y = H*0.30;
+    const pimg = await loadImg(profileImg);
+    if (pimg) {
+      // white border ring
+      ctx.fillStyle="rgba(255,255,255,0.25)";
+      ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R+6, 0, Math.PI*2); ctx.fill();
+      // clip and draw
+      ctx.save(); ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R, 0, Math.PI*2); ctx.clip();
+      ctx.drawImage(pimg, panelCX-PFP_R, PFP_Y-PFP_R, PFP_R*2, PFP_R*2);
+      ctx.restore();
+      // green border
+      ctx.strokeStyle="#4ADE80"; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R+6, 0, Math.PI*2); ctx.stroke();
+    }
+    // name under PFP
+    if (userName) {
+      ctx.fillStyle="#FFFFFF"; ctx.font="bold 20px Arial"; ctx.textAlign="center";
+      ctx.fillText(userName, panelCX, PFP_Y+PFP_R+26);
+      ctx.fillStyle="rgba(255,255,255,0.5)"; ctx.font="13px Arial";
+      ctx.fillText("DCA Strategy", panelCX, PFP_Y+PFP_R+44);
+    }
+    // ── TOKEN LOGO — bottom half ──
+    const TL_Y = H*0.68;
+    if (asset.image) {
+      const logo = await loadImg(asset.image);
+      if (logo) {
+        ctx.save(); ctx.beginPath(); ctx.arc(panelCX, TL_Y, 36, 0, Math.PI*2); ctx.clip();
+        ctx.drawImage(logo, panelCX-36, TL_Y-36, 72, 72); ctx.restore();
+      }
+    }
+    ctx.strokeStyle="rgba(255,255,255,0.2)"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(panelCX, TL_Y, 40, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle="#FFFFFF"; ctx.font="bold 36px Arial"; ctx.textAlign="center";
+    ctx.fillText(asset.symbol.toUpperCase(), panelCX, TL_Y+60);
+    ctx.fillStyle="rgba(255,255,255,0.55)"; ctx.font="14px Arial";
+    ctx.fillText(asset.name, panelCX, TL_Y+80);
+    ctx.fillStyle="#FFFFFF"; ctx.font="bold 22px Arial";
+    ctx.fillText(fmtPrice(liveP), panelCX, TL_Y+108);
+  } else {
+    // No PFP — token logo is the hero, large and centred
+    const TL_Y = H*0.38;
+    const TL_R = 70;
+    if (asset.image) {
+      const logo = await loadImg(asset.image);
+      if (logo) {
+        ctx.save(); ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R, 0, Math.PI*2); ctx.clip();
+        ctx.drawImage(logo, panelCX-TL_R, TL_Y-TL_R, TL_R*2, TL_R*2); ctx.restore();
+      }
+    }
+    ctx.strokeStyle="rgba(255,255,255,0.2)"; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R+6, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle="#FFFFFF"; ctx.font="bold 56px Arial"; ctx.textAlign="center";
+    ctx.fillText(asset.symbol.toUpperCase(), panelCX, TL_Y+TL_R+58);
+    ctx.fillStyle="rgba(255,255,255,0.6)"; ctx.font="17px Arial";
+    ctx.fillText(asset.name, panelCX, TL_Y+TL_R+82);
+    ctx.fillStyle="#FFFFFF"; ctx.font="bold 26px Arial";
+    ctx.fillText(fmtPrice(liveP), panelCX, TL_Y+TL_R+118);
+    if (userName) {
+      ctx.fillStyle="rgba(255,255,255,0.7)"; ctx.font="bold 15px Arial";
+      ctx.fillText(userName, panelCX, TL_Y+TL_R+144);
     }
   }
-  // ring
-  ctx.strokeStyle="rgba(255,255,255,0.25)"; ctx.lineWidth=3;
-  ctx.beginPath(); ctx.arc(LP/2,logoY,60,0,Math.PI*2); ctx.stroke();
 
-  // symbol
-  ctx.fillStyle="#FFFFFF"; ctx.font="bold 60px Arial"; ctx.textAlign="center";
-  ctx.fillText(asset.symbol.toUpperCase(), LP/2, logoY+108);
-  // name
-  ctx.fillStyle="rgba(255,255,255,0.6)"; ctx.font="18px Arial";
-  ctx.fillText(asset.name, LP/2, logoY+134);
-
-  // live price
-  const liveP = livePrice?.price || asset.current_price;
-  ctx.fillStyle="#FFFFFF"; ctx.font="bold 28px Arial";
-  ctx.fillText(fmtPrice(liveP), LP/2, logoY+172);
-
-  // 24h change
+  // 24h change pill
   if (livePrice?.change24h!==undefined) {
     const chg=livePrice.change24h, up=chg>=0;
     const chgTxt=`${fmtPct(chg)} today`;
     const tw=ctx.measureText(chgTxt).width+22;
-    rr(ctx,LP/2-tw/2,logoY+183,tw,28,14);
-    ctx.fillStyle=up?"rgba(255,255,255,0.2)":"rgba(220,38,38,0.55)"; ctx.fill();
-    ctx.fillStyle="#FFFFFF"; ctx.font="bold 15px Arial";
-    ctx.fillText(chgTxt, LP/2, logoY+202);
+    const pillY = H-100;
+    rr(ctx,panelCX-tw/2,pillY,tw,28,14);
+    ctx.fillStyle=up?"rgba(255,255,255,0.2)":"rgba(220,38,38,0.5)"; ctx.fill();
+    ctx.fillStyle="#FFFFFF"; ctx.font="bold 14px Arial"; ctx.textAlign="center";
+    ctx.fillText(chgTxt, panelCX, pillY+19);
   }
 
-  // trend + verdict
+  // trend badge bottom
   const trendColor=analysis.trend==="Uptrend"?"#4ADE80":analysis.trend==="Downtrend"?"#FCA5A5":"#FDE68A";
-  ctx.fillStyle=trendColor; ctx.font="bold 17px Arial"; ctx.textAlign="center";
-  ctx.fillText(analysis.trend.toUpperCase(), LP/2, H-72);
-  ctx.fillStyle="rgba(255,255,255,0.45)"; ctx.font="13px Arial";
+  ctx.fillStyle=trendColor; ctx.font="bold 15px Arial"; ctx.textAlign="center";
+  ctx.fillText(analysis.trend.toUpperCase(), panelCX, H-64);
+  ctx.fillStyle="rgba(255,255,255,0.4)"; ctx.font="12px Arial";
   const vLabel=analysis.score>=3?"Strong Setup":analysis.score>=1?"Decent Setup":analysis.score>=-1?"Mixed Signals":"Weak Setup";
-  ctx.fillText(vLabel, LP/2, H-52);
-
-  // user name + photo bottom-left
-  if (userName||profileImg) {
-    let px=22, py=H-66;
-    if (profileImg) {
-      const pimg=await loadImg(profileImg);
-      if (pimg) {
-        ctx.save(); ctx.beginPath(); ctx.arc(px+18,py+18,18,0,Math.PI*2); ctx.clip();
-        ctx.drawImage(pimg,px,py,36,36); ctx.restore();
-        ctx.strokeStyle="rgba(255,255,255,0.5)"; ctx.lineWidth=2;
-        ctx.beginPath(); ctx.arc(px+18,py+18,18,0,Math.PI*2); ctx.stroke();
-      }
-      px+=44;
-    }
-    if (userName) {
-      ctx.fillStyle="#FFFFFF"; ctx.font="bold 16px Arial"; ctx.textAlign="left";
-      ctx.fillText(userName, px, py+14);
-      ctx.fillStyle="rgba(255,255,255,0.45)"; ctx.font="12px Arial";
-      ctx.fillText("DCA Strategy", px, py+30);
-    }
-  }
+  ctx.fillText(vLabel, panelCX, H-46);
 
   // ── RIGHT WHITE PANEL ──
 
@@ -466,6 +504,7 @@ export default function App() {
   const [loadingHist,setLoadingHist] = useState(false);
 
   const [capital,setCapital]   = useState(500);
+  const [capitalDisplay,setCapitalDisplay] = useState("500");
   const [freqId,setFreqId]     = useState("daily");
   const [months,setMonths]     = useState(3);
   const [targetPct,setTargetPct] = useState(50);
@@ -694,11 +733,24 @@ export default function App() {
 
           <div style={{marginBottom:18}}>
             <label style={{fontSize:13,fontWeight:700,color:G.sub,display:"block",marginBottom:6}}>Total money to invest (USD)</label>
-            <input type="number" style={inp} value={capital} min={10}
-              onChange={e=>setCapital(Math.max(1,Number(e.target.value)))}
-              onFocus={e=>e.target.style.borderColor=G.green}
-              onBlur={e=>e.target.style.borderColor=G.border}
-            />
+            <div style={{position:"relative"}}>
+              <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:16,fontWeight:700,color:G.sub,pointerEvents:"none"}}>$</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                style={{...inp, paddingLeft:28}}
+                value={capitalDisplay}
+                onChange={e=>{
+                  const raw=e.target.value.replace(/[^0-9]/g,"");
+                  const num=Math.max(1,Number(raw)||1);
+                  setCapital(num);
+                  setCapitalDisplay(raw===""?"":Number(raw).toLocaleString("en-US"));
+                }}
+                onFocus={e=>{ e.target.style.borderColor=G.green; setCapitalDisplay(String(capital)); }}
+                onBlur={e=>{ e.target.style.borderColor=G.border; setCapitalDisplay(capital.toLocaleString("en-US")); }}
+                placeholder="e.g. 1,000"
+              />
+            </div>
           </div>
 
           <div style={{marginBottom:18}}>
