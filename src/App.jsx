@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
 // ─── STABLECOINS + WRAPPED ASSETS BLACKLIST (comprehensive) ─────────────────────
 const STABLE = new Set([
@@ -223,7 +223,21 @@ const fmtTok = n => n<0.001?n.toFixed(8):n<1?n.toFixed(4):n<1000?n.toFixed(3):n.
 
 // ─── CANVAS CARD — 1200×675 landscape (perfect for X feed) ───────────────────
 function rr(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.arcTo(x+w,y,x+w,y+r,r);ctx.lineTo(x+w,y+h-r);ctx.arcTo(x+w,y+h,x+w-r,y+h,r);ctx.lineTo(x+r,y+h);ctx.arcTo(x,y+h,x,y+h-r,r);ctx.lineTo(x,y+r);ctx.arcTo(x,y,x+r,y,r);ctx.closePath();}
-function loadImg(src){return new Promise(res=>{const i=new Image();i.crossOrigin="anonymous";i.onload=()=>res(i);i.onerror=()=>res(null);i.src=src;});}
+
+// Load any image — external CoinGecko URLs are routed through the proxy
+// to bypass CORS restrictions that prevent canvas from drawing them directly.
+function loadImg(src) {
+  return new Promise(res => {
+    if (!src) return res(null);
+    const isCoinGecko = src.includes("coingecko.com");
+    const url = isCoinGecko ? `${PROXY}?type=image&url=${encodeURIComponent(src)}` : src;
+    const i = new Image();
+    i.crossOrigin = "anonymous";
+    i.onload = () => res(i);
+    i.onerror = () => res(null);
+    i.src = url;
+  });
+}
 
 async function makeCard({ asset, sim, targetPct, months, freqId, userName, profileImg, analysis, livePrice }) {
   const W=1200, H=675, cv=document.createElement("canvas");
@@ -433,6 +447,21 @@ function Dot() {
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}`}</style>
     </span>
   );
+}
+
+// Coin logo <img> — routes through proxy to fix CORS on canvas
+// For regular <img> tags in the UI, direct URLs work fine.
+// This component just adds a fallback initials circle if the image fails.
+function CoinImg({ src, symbol, size=30 }) {
+  const [err, setErr] = React.useState(false);
+  if (err || !src) {
+    return (
+      <div style={{width:size,height:size,borderRadius:"50%",background:G.greenPale,border:`1px solid ${G.greenBorder}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:size*0.38,fontWeight:800,color:G.green}}>
+        {(symbol||"?").slice(0,2).toUpperCase()}
+      </div>
+    );
+  }
+  return <img src={src} alt={symbol} style={{width:size,height:size,borderRadius:"50%",flexShrink:0,objectFit:"cover"}} onError={()=>setErr(true)}/>;
 }
 function Spinner() {
   return (
@@ -714,7 +743,9 @@ export default function App() {
                 placeholder="Search Bitcoin, Ethereum, Solana… (250 coins)"
               />
               {selected && (
-                <img src={selected.image} alt="" style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",width:24,height:24,borderRadius:"50%"}}/>
+                <div style={{position:"absolute",left:8,top:"50%",transform:"translateY(-50%)"}}>
+                  <CoinImg src={selected.image} symbol={selected.symbol} size={24}/>
+                </div>
               )}
 
               {dropOpen && !selected && (
@@ -726,7 +757,7 @@ export default function App() {
                       onMouseEnter={e=>e.currentTarget.style.background=G.surfaceAlt}
                       onMouseLeave={e=>e.currentTarget.style.background="transparent"}
                     >
-                      <img src={a.image} alt={a.symbol} style={{width:30,height:30,borderRadius:"50%",flexShrink:0}}/>
+                      <CoinImg src={a.image} symbol={a.symbol} size={30}/>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:14,fontWeight:600,color:G.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.name}</div>
                         <div style={{fontSize:12,color:G.muted}}>{a.symbol.toUpperCase()} · #{a.market_cap_rank}</div>
@@ -745,7 +776,7 @@ export default function App() {
           {selected && (
             <div style={{marginTop:14,padding:14,background:G.surfaceAlt,borderRadius:12,border:`1px solid ${G.border}`}}>
               <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                <img src={selected.image} alt="" style={{width:36,height:36,borderRadius:"50%"}}/>
+                <CoinImg src={selected.image} symbol={selected.symbol} size={36}/>
                 <div style={{flex:1}}>
                   <div style={{fontWeight:700,fontSize:15}}>{selected.name} <span style={{color:G.muted,fontWeight:400,fontSize:12}}>#{selected.market_cap_rank}</span></div>
                   {loadingLive
