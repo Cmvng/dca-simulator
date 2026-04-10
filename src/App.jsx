@@ -33,7 +33,10 @@ const FREQS = [
 ];
 
 const TARGETS = [10, 25, 50, 100, 200];
-const CG = "https://api.coingecko.com/api/v3";
+// ── API BASE — points to your Vercel proxy, not CoinGecko directly ────────────
+// The proxy caches all responses server-side so CoinGecko only gets hit once
+// per cache window, no matter how many users are on the app simultaneously.
+const PROXY = "/api/coins";
 const CACHE_TTL = 12 * 60 * 60 * 1000;
 const PRICE_TTL = 60 * 1000;
 
@@ -58,13 +61,10 @@ async function getCoins() {
   const hit = cache.get("coins250");
   if (hit) return hit;
   try {
-    const pages = await Promise.all([
-      fetch(`${CG}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1`).then(r=>r.json()),
-      fetch(`${CG}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=2`).then(r=>r.json()),
-      fetch(`${CG}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=3`).then(r=>r.json()),
-    ]);
-    const all = pages.flat().filter(a => !STABLE.has(a.id));
-    const top = all.slice(0, 250);
+    // Single call to your proxy — proxy handles the 3 CoinGecko pages internally
+    const res = await fetch(`${PROXY}?type=list`);
+    if (!res.ok) throw new Error("Proxy error");
+    const top = await res.json();
     cache.set("coins250", top);
     return top;
   } catch {
@@ -78,7 +78,8 @@ async function getLivePrice(id) {
   const hit = cache.get("lp_"+id, PRICE_TTL);
   if (hit) return hit;
   try {
-    const r = await fetch(`${CG}/simple/price?ids=${id}&vs_currencies=usd&include_24hr_change=true`);
+    const r = await fetch(`${PROXY}?type=price&id=${id}`);
+    if (!r.ok) return null;
     const d = await r.json();
     if (!d[id]) return null;
     const result = { price: d[id].usd, change24h: d[id].usd_24h_change || 0 };
@@ -91,7 +92,7 @@ async function getHistory(id) {
   const hit = cache.get("h_"+id);
   if (hit) return hit;
   try {
-    const r = await fetch(`${CG}/coins/${id}/market_chart?vs_currency=usd&days=120`);
+    const r = await fetch(`${PROXY}?type=history&id=${id}`);
     if (!r.ok) throw new Error();
     const d = await r.json();
     cache.set("h_"+id, d);
