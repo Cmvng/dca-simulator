@@ -115,7 +115,37 @@ export default async function handler(req) {
       return jsonResponse(data, 60, req);
     }
 
-    return errorResponse("Unknown endpoint. Use type=list, type=history&id=XXX, or type=price&id=XXX", 400);
+    // ── ENDPOINT 4: Proxy coin image to fix CORS on canvas ──────────────────────
+    // Canvas cannot draw images from external domains (CoinGecko CDN blocks it).
+    // This endpoint fetches the image server-side and re-serves it from your domain.
+    if (type === "image") {
+      const imgUrl = url.searchParams.get("url");
+      if (!imgUrl) return errorResponse("Missing url param", 400);
+      // Only allow CoinGecko image CDN URLs for safety
+      if (!imgUrl.startsWith("https://assets.coingecko.com/") &&
+          !imgUrl.startsWith("https://coin-images.coingecko.com/")) {
+        return errorResponse("Only CoinGecko image URLs allowed", 403);
+      }
+      try {
+        const imgRes = await fetch(imgUrl);
+        if (!imgRes.ok) throw new Error("Image fetch failed");
+        const blob = await imgRes.arrayBuffer();
+        const contentType = imgRes.headers.get("content-type") || "image/png";
+        return new Response(blob, {
+          status: 200,
+          headers: {
+            "Content-Type": contentType,
+            "Access-Control-Allow-Origin": "*",
+            // Cache images for 7 days — they almost never change
+            "Cache-Control": "public, s-maxage=604800, stale-while-revalidate=86400",
+          },
+        });
+      } catch {
+        return errorResponse("Could not fetch image", 502);
+      }
+    }
+
+    return errorResponse("Unknown endpoint. Use type=list, type=history&id=XXX, type=price&id=XXX, or type=image&url=XXX", 400);
 
   } catch (err) {
     console.error("Proxy error:", err.message);
