@@ -271,18 +271,27 @@ async function makeCard({ asset, sim, targetPct, months, freqId, userName, profi
     const PFP_R = 80; // radius — large and prominent
     const PFP_Y = H*0.30;
     const pimg = await loadImg(profileImg);
+    // Always draw the circle — green fill behind so no grey ring if image fails
+    // Outer glow ring
+    ctx.fillStyle="rgba(255,255,255,0.15)";
+    ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R+10, 0, Math.PI*2); ctx.fill();
+    // Green fill behind image (covers any grey browser default)
+    ctx.fillStyle="#15803D";
+    ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R, 0, Math.PI*2); ctx.fill();
     if (pimg) {
-      // white border ring
-      ctx.fillStyle="rgba(255,255,255,0.25)";
-      ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R+6, 0, Math.PI*2); ctx.fill();
-      // clip and draw
-      ctx.save(); ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R, 0, Math.PI*2); ctx.clip();
+      // Clip image to perfect circle — no grey ring
+      ctx.save();
+      ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R, 0, Math.PI*2); ctx.clip();
+      // Draw image slightly larger than radius to ensure full coverage
       ctx.drawImage(pimg, panelCX-PFP_R, PFP_Y-PFP_R, PFP_R*2, PFP_R*2);
       ctx.restore();
-      // green border
-      ctx.strokeStyle="#4ADE80"; ctx.lineWidth=3;
-      ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R+6, 0, Math.PI*2); ctx.stroke();
     }
+    // Clean white border on top
+    ctx.strokeStyle="rgba(255,255,255,0.9)"; ctx.lineWidth=4;
+    ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R+2, 0, Math.PI*2); ctx.stroke();
+    // Green accent ring
+    ctx.strokeStyle="#4ADE80"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R+6, 0, Math.PI*2); ctx.stroke();
     // name under PFP
     if (userName) {
       ctx.fillStyle="#FFFFFF"; ctx.font="bold 20px Arial"; ctx.textAlign="center";
@@ -292,15 +301,19 @@ async function makeCard({ asset, sim, targetPct, months, freqId, userName, profi
     }
     // ── TOKEN LOGO — bottom half ──
     const TL_Y = H*0.68;
+    const TL_R2 = 38;
+    // White fill behind logo so it looks clean
+    ctx.fillStyle="rgba(255,255,255,0.95)";
+    ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R2, 0, Math.PI*2); ctx.fill();
     if (asset.image) {
       const logo = await loadImg(asset.image);
       if (logo) {
-        ctx.save(); ctx.beginPath(); ctx.arc(panelCX, TL_Y, 36, 0, Math.PI*2); ctx.clip();
-        ctx.drawImage(logo, panelCX-36, TL_Y-36, 72, 72); ctx.restore();
+        ctx.save(); ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R2, 0, Math.PI*2); ctx.clip();
+        ctx.drawImage(logo, panelCX-TL_R2, TL_Y-TL_R2, TL_R2*2, TL_R2*2); ctx.restore();
       }
     }
-    ctx.strokeStyle="rgba(255,255,255,0.2)"; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.arc(panelCX, TL_Y, 40, 0, Math.PI*2); ctx.stroke();
+    ctx.strokeStyle="rgba(255,255,255,0.5)"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R2+3, 0, Math.PI*2); ctx.stroke();
     ctx.fillStyle="#FFFFFF"; ctx.font="bold 36px Arial"; ctx.textAlign="center";
     ctx.fillText(asset.symbol.toUpperCase(), panelCX, TL_Y+60);
     ctx.fillStyle="rgba(255,255,255,0.55)"; ctx.font="14px Arial";
@@ -311,6 +324,9 @@ async function makeCard({ asset, sim, targetPct, months, freqId, userName, profi
     // No PFP — token logo is the hero, large and centred
     const TL_Y = H*0.38;
     const TL_R = 70;
+    // White fill behind logo for clean display on green panel
+    ctx.fillStyle="rgba(255,255,255,0.95)";
+    ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R, 0, Math.PI*2); ctx.fill();
     if (asset.image) {
       const logo = await loadImg(asset.image);
       if (logo) {
@@ -318,8 +334,8 @@ async function makeCard({ asset, sim, targetPct, months, freqId, userName, profi
         ctx.drawImage(logo, panelCX-TL_R, TL_Y-TL_R, TL_R*2, TL_R*2); ctx.restore();
       }
     }
-    ctx.strokeStyle="rgba(255,255,255,0.2)"; ctx.lineWidth=3;
-    ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R+6, 0, Math.PI*2); ctx.stroke();
+    ctx.strokeStyle="rgba(255,255,255,0.6)"; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R+4, 0, Math.PI*2); ctx.stroke();
     ctx.fillStyle="#FFFFFF"; ctx.font="bold 56px Arial"; ctx.textAlign="center";
     ctx.fillText(asset.symbol.toUpperCase(), panelCX, TL_Y+TL_R+58);
     ctx.fillStyle="rgba(255,255,255,0.6)"; ctx.font="17px Arial";
@@ -364,23 +380,27 @@ async function makeCard({ asset, sim, targetPct, months, freqId, userName, profi
   ctx.strokeStyle="#E2F5E9"; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(RX+PAD,82); ctx.lineTo(W-PAD,82); ctx.stroke();
 
-  // target label
-  ctx.fillStyle=good?"#16A34A":"#DC2626"; ctx.font="bold 14px Arial"; ctx.textAlign="left";
+  // Color is ALWAYS based on profit sign — green = positive, red = negative
+  // NEVER based on market verdict/score. A positive profit is always green.
+  const profitColor = sim.targetProfit >= 0 ? "#16A34A" : "#DC2626";
+
+  // target label — always green since target is always a gain from live price
+  ctx.fillStyle="#16A34A"; ctx.font="bold 14px Arial"; ctx.textAlign="left";
   ctx.fillText(`IF ${asset.symbol.toUpperCase()} HITS +${targetPct}%  →  ${fmtPrice(sim.targetPrice)}`, RX+PAD, 110);
 
-  // BIG NUMBER
+  // BIG NUMBER — always dark, clean
   ctx.fillStyle=G.dark; ctx.font="bold 84px Arial";
   ctx.fillText(fmtUSD(sim.targetVal), RX+PAD, 202);
 
-  // profit + ROI pill on same row
-  ctx.fillStyle=good?"#16A34A":"#DC2626"; ctx.font="bold 20px Arial";
+  // profit + ROI pill — always green (it's always a positive target)
+  ctx.fillStyle=profitColor; ctx.font="bold 20px Arial";
   const profitTxt=`Profit: +${fmtUSD(sim.targetProfit)}`;
   ctx.fillText(profitTxt, RX+PAD, 234);
   const profW=ctx.measureText(profitTxt).width;
   const roiTxt=`+${sim.targetROI.toFixed(0)}% return`;
   const roiW=ctx.measureText(roiTxt).width+24;
   rr(ctx,RX+PAD+profW+14,215,roiW,26,13);
-  ctx.fillStyle=good?"#16A34A":"#DC2626"; ctx.fill();
+  ctx.fillStyle=profitColor; ctx.fill();
   ctx.fillStyle="#fff"; ctx.font="bold 13px Arial";
   ctx.fillText(roiTxt, RX+PAD+profW+26, 233);
 
@@ -902,19 +922,19 @@ export default function App() {
           return (
             <>
               {/* TARGET — main result */}
-              <div style={{borderRadius:18,padding:"24px",marginBottom:14,background:good?"linear-gradient(135deg,#F0FDF4,#DCFCE7)":"linear-gradient(135deg,#FEF2F2,#FFE4E6)",border:`2px solid ${good?G.greenBorder:G.redBorder}`}}>
-                <div style={{fontSize:12,fontWeight:800,color:good?G.green:G.red,letterSpacing:1.5,textTransform:"uppercase"}}>
-                  {good?"🎯 If your target hits":"⚠️ Reality check — if your target hits"}
+              <div style={{borderRadius:18,padding:"24px",marginBottom:14,background:"linear-gradient(135deg,#F0FDF4,#DCFCE7)",border:`2px solid ${G.greenBorder}`}}>
+                <div style={{fontSize:12,fontWeight:800,color:G.green,letterSpacing:1.5,textTransform:"uppercase"}}>
+                  🎯 If your target hits
                 </div>
                 <div style={{fontSize:13,color:G.muted,marginTop:4}}>
                   {selected.symbol.toUpperCase()} reaches {fmtPrice(sim.targetPrice)} (+{targetPct}%)
                 </div>
-                <div style={{fontSize:"clamp(36px,6vw,54px)",fontWeight:900,lineHeight:1.05,margin:"8px 0 4px",color:good?G.green:G.red}}>
+                <div style={{fontSize:"clamp(36px,6vw,54px)",fontWeight:900,lineHeight:1.05,margin:"8px 0 4px",color:G.green}}>
                   {fmtUSD(sim.targetVal)}
                 </div>
                 <div style={{fontSize:16,fontWeight:800,color:G.dark,marginBottom:aggressive?12:0}}>
-                  You profit <span style={{color:good?G.green:G.red}}>+{fmtUSD(sim.targetProfit)}</span> on {fmtUSD(totalInvested)} invested
-                  <span style={{background:good?G.green:G.red,color:"#fff",borderRadius:20,padding:"2px 12px",fontSize:14,marginLeft:8}}>+{sim.targetROI.toFixed(0)}%</span>
+                  You profit <span style={{color:G.green}}>+{fmtUSD(sim.targetProfit)}</span> on {fmtUSD(totalInvested)} invested
+                  <span style={{background:G.green,color:"#fff",borderRadius:20,padding:"2px 12px",fontSize:14,marginLeft:8}}>+{sim.targetROI.toFixed(0)}%</span>
                 </div>
                 {aggressive && (
                   <div style={{background:G.amberPale,border:`1px solid ${G.amberBorder}`,borderRadius:10,padding:"10px 14px",fontSize:13,color:G.amber}}>
