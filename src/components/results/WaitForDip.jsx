@@ -12,7 +12,7 @@ export default function WaitForDip({ waitForDip, targetPct }) {
   const { base, dips } = waitForDip;
   const row = (label, r, emphasize = false) => (
     <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, padding: "8px 0", borderBottom: HAIRLINE_2, flexWrap: "wrap" }}>
-      <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: emphasize ? 500 : 400, color: T.ink, minWidth: 110 }}>{label}</span>
+      <span style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: emphasize ? 600 : 500, color: T.ink, minWidth: 110 }}>{label}</span>
       <span style={{ ...monoFigure, color: T.ink3 }}>avg entry {fmtPrice(r.avgEntry)}</span>
       <span style={{ ...monoFigure, color: T.ink3 }}>at target: <span style={{ color: T.ink }}>{fmtUSD(r.valueAtTarget)}</span></span>
       <span style={{ ...monoFigure, color: plColor(r.roiPct) }}>{fmtPct(r.roiPct)}</span>

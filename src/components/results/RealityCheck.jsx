@@ -7,16 +7,16 @@ import { SANS, T, monoFigure, body } from "../../styles/theme.js";
 import { fmtPct } from "../../lib/formatting/percentage.js";
 import { SpecRow, Pill } from "../ui.jsx";
 
-// verdict word, lowercase — the one permitted pill
+// verdict word for the soft blue pill
 const verdictWord = label =>
-  label === "Relatively modest" ? "modest" : String(label).toLowerCase();
+  label === "Relatively modest" ? "Modest" : String(label);
 
 export default function RealityCheck({ reality, windowDays }) {
   if (!reality?.ok) return null;
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
-        <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 400, color: T.ink }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+        <span style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: 400, color: T.ink }}>
           Your target: <span style={monoFigure}>+{reality.targetPct}%</span> over <span style={monoFigure}>{windowDays}</span> days
         </span>
         <Pill>{verdictWord(reality.label)}</Pill>

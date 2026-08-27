@@ -43,7 +43,7 @@ export function DrawdownCard({ drawdown, mode }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-        <Numeral size={28} color={dd < -8 ? T.loss : T.ink}>{fmtPct(dd)}</Numeral>
+        <Numeral size={26} color={dd < -8 ? T.loss : T.ink}>{fmtPct(dd)}</Numeral>
         <span style={body}>maximum {mode === "backtest" ? "" : "simulated "}drawdown along the plan</span>
       </div>
       {dd < 0 && (

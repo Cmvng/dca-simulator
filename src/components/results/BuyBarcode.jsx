@@ -1,9 +1,9 @@
-// Buy barcode — the DCA schedule as a machined scale under the price path.
-// Evenly spaced vertical ticks on a hairline baseline: --blue ticks = buys
-// made, one taller --ink tick = "you are here", --ink-3 ticks = remaining.
+// Buy barcode — the DCA schedule as a scale under the price path.
+// Evenly spaced vertical ticks on a soft baseline: --blue ticks = buys made,
+// one taller --ink tick = "you are here", --ink-3 ticks = remaining.
 
 import React from "react";
-import { T, MONO } from "../../styles/theme.js";
+import { T, SANS } from "../../styles/theme.js";
 
 const W = 640, PAD_X = 3;
 
@@ -33,7 +33,7 @@ export default function BuyBarcode({ entries, madeCount = 0, currentIndex = null
           return <line key={i} x1={x(i)} x2={x(i)} y1={baseY - h} y2={baseY} stroke={color} strokeWidth={w} />;
         })}
       </svg>
-      <div style={{ display: "flex", justifyContent: "space-between", fontFamily: MONO, fontSize: 10, letterSpacing: "0.05em", color: T.ink3, marginTop: 3 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontFamily: SANS, fontSize: 11, fontWeight: 500, color: T.ink3, marginTop: 3 }}>
         <span>buy 1</span>
         <span>buy {entries}</span>
       </div>

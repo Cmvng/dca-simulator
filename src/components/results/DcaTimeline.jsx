@@ -2,15 +2,15 @@
 // price, contribution, units, cumulative units and running average entry.
 
 import React from "react";
-import { T, MONO, HAIRLINE_2 } from "../../styles/theme.js";
+import { T, SANS } from "../../styles/theme.js";
 import { Collapsible } from "../ui.jsx";
 import { fmtUSDPrecise, fmtPrice, fmtTok } from "../../lib/formatting/money.js";
 import { fmtDate } from "../../lib/formatting/dates.js";
 
 export default function DcaTimeline({ series, symbol, hasFees }) {
   if (!series?.length) return null;
-  const th = { textAlign: "right", padding: "7px 8px", fontFamily: MONO, fontSize: 10, fontWeight: 400, letterSpacing: "0.05em", textTransform: "lowercase", color: T.ink3, whiteSpace: "nowrap" };
-  const td = { textAlign: "right", padding: "7px 8px", fontFamily: MONO, fontSize: 12, fontVariantNumeric: "tabular-nums", color: T.ink, whiteSpace: "nowrap" };
+  const th = { textAlign: "right", padding: "8px 8px", fontFamily: SANS, fontSize: 12, fontWeight: 600, color: T.ink3, whiteSpace: "nowrap" };
+  const td = { textAlign: "right", padding: "8px 8px", fontFamily: SANS, fontSize: 13, fontWeight: 500, fontVariantNumeric: "tabular-nums", color: T.ink, whiteSpace: "nowrap" };
 
   return (
     <Collapsible
@@ -23,7 +23,7 @@ export default function DcaTimeline({ series, symbol, hasFees }) {
             DCA purchase schedule
           </caption>
           <thead>
-            <tr style={{ borderBottom: `0.5px solid ${T.line}` }}>
+            <tr style={{ borderBottom: `1px solid ${T.line}` }}>
               <th scope="col" style={{ ...th, textAlign: "left" }}>#</th>
               <th scope="col" style={{ ...th, textAlign: "left" }}>Date</th>
               <th scope="col" style={th}>Price</th>
@@ -36,7 +36,7 @@ export default function DcaTimeline({ series, symbol, hasFees }) {
           </thead>
           <tbody>
             {series.map(b => (
-              <tr key={b.i} style={{ borderBottom: HAIRLINE_2 }}>
+              <tr key={b.i} style={{ borderBottom: `1px solid ${T.line}` }}>
                 <td style={{ ...td, textAlign: "left", color: T.ink3 }}>{b.i + 1}</td>
                 <td style={{ ...td, textAlign: "left" }}>{fmtDate(b.date)}</td>
                 <td style={td}>{fmtPrice(b.price)}</td>

@@ -18,7 +18,7 @@ export default function MarketSnapshot({ analysis, live, history }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
-        <Numeral size={28}>{fmtPrice(price)}</Numeral>
+        <Numeral size={26}>{fmtPrice(price)}</Numeral>
         {live && <SignedPct val={live.change24h} />}
         <Staleness fetchedAt={live?.fetchedAt || history?.fetchedAt} stale={live?.stale || history?.stale} />
       </div>

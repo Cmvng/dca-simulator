@@ -1,10 +1,12 @@
 // DCA vs Hybrid vs Lump Sum — same capital, same asset, same evaluation
 // price. The winner depends on the price path; no blanket claims.
+// CLEAR BLUE signature moment #4: each strategy as a soft stat cell with a
+// big tabular value; the leader carries a soft "ahead" pill.
 
 import React, { useEffect } from "react";
-import { T, SANS, MONO, monoFigure, body, plColor, HAIRLINE_2 } from "../../styles/theme.js";
+import { T, SANS, body } from "../../styles/theme.js";
+import { Pill, SignedPct } from "../ui.jsx";
 import { fmtUSD, fmtPrice } from "../../lib/formatting/money.js";
-import { fmtPct } from "../../lib/formatting/percentage.js";
 import { track } from "../../lib/analytics.js";
 
 export default function StrategyComparison({ comparison, targetPct, capital }) {
@@ -17,33 +19,37 @@ export default function StrategyComparison({ comparison, targetPct, capital }) {
 
   return (
     <div>
-      <div style={{ ...body, marginBottom: 6 }}>
-        Same {fmtUSD(capital)}, same coin, all valued at your +{targetPct}% target price. Lump sum enters everything at today's live price; DCA spreads entries over the simulated path.
+      <div style={{ ...body, marginBottom: 12 }}>
+        Same {fmtUSD(capital)}, same coin, all valued at your +{targetPct}% target price. Lump sum enters everything at today&apos;s live price; DCA spreads entries over the simulated path.
       </div>
-      {comparison.map((s, i) => {
-        const isBest = s.id === best.id;
-        return (
-          <div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "10px 0", borderBottom: i === comparison.length - 1 ? "none" : HAIRLINE_2 }}>
-            <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: isBest ? 500 : 400, color: T.ink }}>
-              {s.name}
-              {isBest && (
-                <span aria-label="best under this scenario" style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.05em", color: T.ink3 }}> · ahead</span>
-              )}
-            </span>
-            <span style={{ textAlign: "right" }}>
-              <div style={monoFigure}>{fmtUSD(s.valueAtTarget)}</div>
-              <div style={{ ...monoFigure, color: plColor(s.roiAtTarget) }}>{fmtPct(s.roiAtTarget)}</div>
-              <div style={{ ...monoFigure, fontSize: 11, color: T.ink3 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 }}>
+        {comparison.map(s => {
+          const isBest = s.id === best.id;
+          return (
+            <div key={s.id} style={{ background: T.card2, borderRadius: 16, padding: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+                <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: T.ink }}>{s.name}</span>
+                {isBest && (
+                  <Pill style={{ fontSize: 11, padding: "3px 10px" }}>ahead</Pill>
+                )}
+              </div>
+              <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 700, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.01em", color: T.ink }}>
+                {fmtUSD(s.valueAtTarget)}
+              </div>
+              <div style={{ marginTop: 2 }}>
+                <SignedPct val={s.roiAtTarget} />
+              </div>
+              <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 500, color: T.ink3, marginTop: 6, fontVariantNumeric: "tabular-nums" }}>
                 avg entry {fmtPrice(s.avgEntry)}
                 {s.totalFees > 0 && <> · fees {fmtUSD(s.totalFees)}</>}
               </div>
-            </span>
-          </div>
-        );
-      })}
+            </div>
+          );
+        })}
+      </div>
       {dca && lump && (
-        <div style={{ ...body, color: T.ink, marginTop: 10 }}>
-          Under this scenario, <span style={{ fontWeight: 500 }}>{diff >= 0 ? "DCA" : "lump sum"}</span> ends {fmtUSD(Math.abs(diff))} ahead.
+        <div style={{ ...body, color: T.ink, marginTop: 12 }}>
+          Under this scenario, <span style={{ fontWeight: 600 }}>{diff >= 0 ? "DCA" : "lump sum"}</span> ends {fmtUSD(Math.abs(diff))} ahead.
           <span style={{ color: T.ink3 }}> Which strategy wins depends entirely on the price path — neither always wins.</span>
         </div>
       )}

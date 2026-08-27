@@ -2,7 +2,7 @@
 // distribution, clearly labeled "model-based estimate" with methodology.
 
 import React, { useEffect, useState } from "react";
-import { T, HAIRLINE, SANS, body } from "../../styles/theme.js";
+import { T, SANS, body } from "../../styles/theme.js";
 import { SpecRow, Collapsible } from "../ui.jsx";
 import { Skeleton } from "../LoadingState.jsx";
 import { fmtUSD } from "../../lib/formatting/money.js";
@@ -50,8 +50,8 @@ export default function MonteCarloCard({ sim, seed }) {
           <span style={{ color: v >= mc.invested ? T.gain : T.loss }}>{fmtUSD(v)}</span>
         </SpecRow>
       ))}
-      <div style={{ marginTop: 12, borderTop: HAIRLINE, borderBottom: HAIRLINE, padding: "10px 0", fontFamily: SANS, fontSize: 13, fontWeight: 400, lineHeight: 1.6, color: T.blueDeep }}>
-        <span style={{ fontWeight: 500 }}>Model-based estimate:</span> {mc.probAboveTargetPct.toFixed(0)}% of these simulated paths ended at or above your +{sim.config.targetPct}% target.
+      <div style={{ marginTop: 12, background: T.blueSoft, borderRadius: 14, padding: "12px 14px", fontFamily: SANS, fontSize: 13, fontWeight: 500, lineHeight: 1.6, color: T.blue }}>
+        <span style={{ fontWeight: 700 }}>Model-based estimate:</span> {mc.probAboveTargetPct.toFixed(0)}% of these simulated paths ended at or above your +{sim.config.targetPct}% target.
         This is a property of the model below — not the real-world chance.
       </div>
       <div style={{ marginTop: 10 }}>

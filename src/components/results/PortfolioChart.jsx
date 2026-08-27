@@ -1,12 +1,12 @@
 // Interactive SVG portfolio chart — no chart library, ~4KB.
-// Shows: simulated price path (right axis) as the signature --blue-deep line
-// over a faint --paper-2 area fill, cumulative invested and portfolio value
-// (left axis), and the dashed --blue-soft average-entry rule.
+// CLEAR BLUE: the simulated price path as the one vivid --blue line over a
+// soft --blue-soft area, portfolio value in --ink, cumulative invested as a
+// dashed --ink-3 line, and the dashed deep-blue average-entry rule.
 // Hover/touch snaps to the nearest purchase. The DcaTimeline table below the
 // chart is the screen-reader/data alternative to this graphic.
 
 import React, { useMemo, useRef, useState } from "react";
-import { T, MONO, SANS } from "../../styles/theme.js";
+import { T, SANS, CARD_SHADOW } from "../../styles/theme.js";
 import { fmtUSD, fmtPrice, fmtTok } from "../../lib/formatting/money.js";
 import { fmtDateShort } from "../../lib/formatting/dates.js";
 
@@ -46,11 +46,11 @@ export default function PortfolioChart({ series, avgEntry, mode }) {
   return (
     <div>
       {/* legend — labels + line styles, never color alone */}
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontFamily: MONO, fontSize: 11, letterSpacing: "0.05em", textTransform: "lowercase", color: T.ink3, marginBottom: 8 }}>
-        <LegendItem color={T.ink} width={1.5} label="portfolio value" />
-        <LegendItem color={T.ink3} width={1} dash="4 3" label="amount invested" />
-        <LegendItem color={T.blueDeep} width={1.5} label={mode === "backtest" ? "actual price" : "simulated price"} />
-        <LegendItem color={T.blueSoft} width={1} dash="6 4" label="avg entry" />
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontFamily: SANS, fontSize: 11, fontWeight: 500, color: T.ink3, marginBottom: 8 }}>
+        <LegendItem color={T.ink} width={2} label="Portfolio value" />
+        <LegendItem color={T.ink3} width={1} dash="4 3" label="Amount invested" />
+        <LegendItem color={T.blue} width={2} label={mode === "backtest" ? "Actual price" : "Simulated price"} />
+        <LegendItem color={T.bluePress} width={1.5} dash="6 4" label="Avg entry" />
       </div>
 
       <div style={{ position: "relative" }}>
@@ -60,8 +60,8 @@ export default function PortfolioChart({ series, avgEntry, mode }) {
           style={{ width: "100%", height: "auto", display: "block", touchAction: "pan-y" }}
           onPointerMove={onMove} onPointerLeave={() => setHover(null)}
         >
-          {/* price-path area fill — solid --paper-2, drawn first so gridlines stay legible over it */}
-          <path d={`${path(s => s.price, yP)}L${x(series.length - 1)},${H - PAD_B}L${x(0)},${H - PAD_B}Z`} fill={T.paper2} />
+          {/* price-path area fill — soft blue tint, drawn first so gridlines stay legible over it */}
+          <path d={`${path(s => s.price, yP)}L${x(series.length - 1)},${H - PAD_B}L${x(0)},${H - PAD_B}Z`} fill={T.blueSoft} />
 
           {/* gridlines + $ axis */}
           {Array.from({ length: ticksY + 1 }, (_, i) => {
@@ -69,36 +69,36 @@ export default function PortfolioChart({ series, avgEntry, mode }) {
             return (
               <g key={i}>
                 <line x1={PAD_L} x2={W - PAD_R} y1={yM(v)} y2={yM(v)} stroke={T.line} strokeWidth="1" />
-                <text x={PAD_L - 6} y={yM(v) + 4} textAnchor="end" fontSize="10" fontFamily={MONO} fill={T.ink3}>{fmtUSD(v)}</text>
+                <text x={PAD_L - 6} y={yM(v) + 4} textAnchor="end" fontSize="11" fontWeight="500" fontFamily={SANS} fill={T.ink3}>{fmtUSD(v)}</text>
               </g>
             );
           })}
           {/* price axis (right) */}
           {Array.from({ length: 3 }, (_, i) => {
             const v = model.pMin + ((model.pMax - model.pMin) / 2) * i;
-            return <text key={i} x={W - PAD_R + 6} y={yP(v) + 4} fontSize="10" fontFamily={MONO} fill={T.ink3}>{fmtPrice(v)}</text>;
+            return <text key={i} x={W - PAD_R + 6} y={yP(v) + 4} fontSize="11" fontWeight="500" fontFamily={SANS} fill={T.ink3}>{fmtPrice(v)}</text>;
           })}
           {/* x-axis dates */}
           {Array.from({ length: ticksX + 1 }, (_, i) => {
             const idx = Math.round((i / ticksX) * (series.length - 1));
-            return <text key={i} x={x(idx)} y={H - 8} textAnchor="middle" fontSize="10" fontFamily={MONO} fill={T.ink3}>{fmtDateShort(series[idx].date)}</text>;
+            return <text key={i} x={x(idx)} y={H - 8} textAnchor="middle" fontSize="11" fontWeight="500" fontFamily={SANS} fill={T.ink3}>{fmtDateShort(series[idx].date)}</text>;
           })}
 
           {/* invested (dashed) */}
           <path d={path(s => s.cumInvested, yM)} fill="none" stroke={T.ink3} strokeWidth="1" strokeDasharray="4 3" />
           {/* portfolio value */}
-          <path d={path(s => s.value, yM)} fill="none" stroke={T.ink} strokeWidth="1.5" strokeLinejoin="round" />
+          <path d={path(s => s.value, yM)} fill="none" stroke={T.ink} strokeWidth="2" strokeLinejoin="round" />
           {/* price path (right axis) */}
-          <path d={path(s => s.price, yP)} fill="none" stroke={T.blueDeep} strokeWidth="1.5" strokeLinejoin="round" />
+          <path d={path(s => s.price, yP)} fill="none" stroke={T.blue} strokeWidth="2" strokeLinejoin="round" />
           {/* avg entry rule */}
-          <line x1={PAD_L} x2={W - PAD_R} y1={yP(avgEntry)} y2={yP(avgEntry)} stroke={T.blueSoft} strokeWidth="1" strokeDasharray="6 4" />
+          <line x1={PAD_L} x2={W - PAD_R} y1={yP(avgEntry)} y2={yP(avgEntry)} stroke={T.bluePress} strokeWidth="1.5" strokeDasharray="6 4" />
 
           {/* hover crosshair + active dots (the only dots on the chart) */}
           {hovered && (
             <g>
               <line x1={x(hover)} x2={x(hover)} y1={PAD_T} y2={H - PAD_B} stroke={T.ink3} strokeWidth="1" />
               <circle cx={x(hover)} cy={yM(hovered.value)} r="3.5" fill={T.ink} />
-              <circle cx={x(hover)} cy={yP(hovered.price)} r="3" fill={T.blueDeep} />
+              <circle cx={x(hover)} cy={yP(hovered.price)} r="3" fill={T.blue} />
             </g>
           )}
         </svg>
@@ -108,11 +108,12 @@ export default function PortfolioChart({ series, avgEntry, mode }) {
             position: "absolute", top: 8,
             left: hover / series.length < 0.5 ? "auto" : 8,
             right: hover / series.length < 0.5 ? 8 : "auto",
-            background: T.ink, color: "#FFFFFF", borderRadius: 2,
-            padding: "9px 12px", fontFamily: SANS, fontSize: 11, fontWeight: 400,
+            background: T.card, color: T.ink, borderRadius: 12,
+            border: `1px solid ${T.line}`, boxShadow: CARD_SHADOW,
+            padding: "10px 12px", fontFamily: SANS, fontSize: 11, fontWeight: 500,
             lineHeight: 1.7, pointerEvents: "none", minWidth: 176,
           }}>
-            <div style={{ fontWeight: 500, marginBottom: 2 }}>Buy #{hover + 1} · {fmtDateShort(hovered.date)}</div>
+            <div style={{ fontWeight: 700, marginBottom: 2 }}>Buy #{hover + 1} · {fmtDateShort(hovered.date)}</div>
             <TipRow label="Price" value={fmtPrice(hovered.price)} />
             <TipRow label="Contribution" value={fmtUSD(hovered.gross)} />
             <TipRow label="Units" value={fmtTok(hovered.units)} />
@@ -129,8 +130,8 @@ export default function PortfolioChart({ series, avgEntry, mode }) {
 function TipRow({ label, value }) {
   return (
     <div style={{ display: "flex", justifyContent: "space-between", gap: 14 }}>
-      <span>{label}</span>
-      <span style={{ fontFamily: MONO, fontSize: 11, fontVariantNumeric: "tabular-nums" }}>{value}</span>
+      <span style={{ color: T.ink2 }}>{label}</span>
+      <span style={{ fontFamily: SANS, fontSize: 11, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{value}</span>
     </div>
   );
 }

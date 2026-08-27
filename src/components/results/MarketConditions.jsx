@@ -5,7 +5,7 @@ import React from "react";
 import { T, monoLabel, monoFigure, body } from "../../styles/theme.js";
 import { SpecRow, ToneBadge, Collapsible } from "../ui.jsx";
 
-const Strong = ({ children }) => <span style={{ fontWeight: 500, color: T.ink }}>{children}</span>;
+const Strong = ({ children }) => <span style={{ fontWeight: 600, color: T.ink }}>{children}</span>;
 
 export default function MarketConditions({ conditions, analysis }) {
   if (!conditions) return null;
@@ -20,7 +20,7 @@ export default function MarketConditions({ conditions, analysis }) {
         </SpecRow>
       ))}
       <div style={{ marginTop: 12, display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ ...monoLabel, marginBottom: 0 }}>overall assessment:</span>
+        <span style={{ ...monoLabel, marginBottom: 0 }}>Overall assessment</span>
         <ToneBadge tone={conditions.overallTone}>{conditions.overall}</ToneBadge>
       </div>
       {conditions.reasons.length > 0 && (

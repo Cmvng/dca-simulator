@@ -2,13 +2,13 @@
 // readers; every mode and assumption disclosed.
 
 import React from "react";
-import { T, monoLabel, body } from "../../styles/theme.js";
+import { T, SANS, body } from "../../styles/theme.js";
 import { Collapsible } from "../ui.jsx";
 import { MODEL_LABEL } from "../../lib/version.js";
 
-const H = ({ children }) => <div style={{ ...monoLabel, color: T.ink2, margin: "12px 0 4px" }}>{children}</div>;
+const H = ({ children }) => <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, color: T.ink, margin: "14px 0 4px" }}>{children}</div>;
 const P = ({ children }) => <p style={{ ...body, margin: "0 0 4px" }}>{children}</p>;
-const Strong = ({ children }) => <span style={{ fontWeight: 500, color: T.ink }}>{children}</span>;
+const Strong = ({ children }) => <span style={{ fontWeight: 600, color: T.ink }}>{children}</span>;
 
 export default function Methodology({ mode = "scenario" }) {
   return (
