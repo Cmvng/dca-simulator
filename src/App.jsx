@@ -16,6 +16,8 @@ import SchedulePreview from "./components/SchedulePreview.jsx";
 import ErrorState from "./components/ErrorState.jsx";
 import { ProgressLoading } from "./components/LoadingState.jsx";
 import ResultsView from "./components/results/ResultsView.jsx";
+import AssumptionsDrawer from "./components/AssumptionsDrawer.jsx";
+import Methodology from "./components/results/Methodology.jsx";
 import { useCoins } from "./hooks/useCoins.js";
 import { useMarketData } from "./hooks/useMarketData.js";
 import { useSimulation } from "./hooks/useSimulation.js";
@@ -318,6 +320,8 @@ export default function App() {
         {simApi.simState === "done" && mode === "backtest" && simApi.backtestResult && selected && (
           <Suspense fallback={null}>
             <BacktestView bt={simApi.backtestResult} selected={selected} />
+            <AssumptionsDrawer sim={simApi.backtestResult} mode="backtest" />
+            <Methodology mode="backtest" />
           </Suspense>
         )}
 

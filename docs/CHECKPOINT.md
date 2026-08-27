@@ -3,10 +3,12 @@
 > Snapshot of where the project stands right now. Update this file whenever a work session ends,
 > so the next session (human or AI) can resume instantly.
 
-**Date:** 2026-08-27 (v2 upgrade session)
-**Branch state:** `claude/project-docs-checkpoint-ywkwop` — carries the full v2 product upgrade
-(not yet merged to `main`, no PR opened, NOT deployed).
-**Model version:** CMVNG Simulation v2.0.0 (`src/lib/version.js`)
+**Date:** 2026-08-27 (v2 upgrade session + INSTRUMENT redesign run)
+**Branch state:** `feat/cmvng-v2-upgrade` — v2 features + the INSTRUMENT design system
+(branched from `claude/project-docs-checkpoint-ywkwop`; not merged to `main`, no PR, NOT deployed
+from this branch — the Railway deploy tracks the older branch).
+**Model version:** CMVNG Simulation v2.0.0 (`src/lib/version.js`) — unchanged by the redesign;
+the engine is frozen and guarded by `behaviorLock.test.js` + the v1 oracle (31 tests).
 
 ---
 
@@ -99,3 +101,23 @@
 - `npm run dev` now serves the API locally via vite middleware — `vercel dev` no longer required.
 - The v1 methodology is intentionally preserved; changing any calculation requires bumping
   `MODEL_VERSION` and keeping the oracle test honest (update it consciously, never casually).
+
+
+---
+
+## INSTRUMENT redesign run (same day, staged with verification gates)
+
+- Gate 0: read-only Inspector subagent produced an architecture map; orchestrator spot-checked
+  quotes against source. Gate 1: ESLint (flat config) clean baseline, behavior-lock test freezing
+  exact engine outputs, Playwright smoke harness committed (tools/smoke.mjs).
+- Gates 2-5: full visual rebuild to DESIGN.md ("INSTRUMENT"): ink/paper/line + one blue family +
+  semantic P/L only; hairline sections; mono whisper labels; tabular figures; hero numeral with
+  one-shot count-up; signature components ScenarioRuler (outcome ruler), BuyBarcode, restyled
+  price path; spec-sheet rows; the single permitted pill (Reality Check verdict); flat black
+  primary bar; no gradients/shadows/pills/emoji; weights 400/500; sentence case.
+- New since the morning session: keyboard-navigable coin combobox, btc/eth/sol/xrp quick picks,
+  share cards rebuilt in 3 formats x 3 contents (plan / reality check / dca-vs-lump) with a
+  content picker, AssumptionsDrawer on both result modes, Methodology now also on backtest,
+  docs/PUBLIC_PLANS.md (/plan/<id> architecture), security-audit greps clean.
+- Every gate ran build + lint + 31/31 tests + 13/13 smoke; final QA: zero horizontal overflow at
+  320/360/390/430/768/1024/1440, no console errors, bundle ~73.7KB gzip main + lazy chunks.

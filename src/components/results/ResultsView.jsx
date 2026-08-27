@@ -23,6 +23,7 @@ import BuyBarcode from "./BuyBarcode.jsx";
 import DcaTimeline from "./DcaTimeline.jsx";
 import WaitForDip from "./WaitForDip.jsx";
 import Methodology from "./Methodology.jsx";
+import AssumptionsDrawer from "../AssumptionsDrawer.jsx";
 
 const MonteCarloCard = React.lazy(() => import("./MonteCarloCard.jsx"));
 
@@ -154,7 +155,8 @@ export default function ResultsView({ sim, selected, analysis, live, history, ta
       {/* ── SHARE / SAVE ── */}
       <div ref={shareRef}>{shareSlot}</div>
 
-      {/* ── METHODOLOGY ── */}
+      {/* ── ASSUMPTIONS + METHODOLOGY ── */}
+      <AssumptionsDrawer sim={sim} mode="scenario" />
       <Methodology mode="scenario" />
     </>
   );
