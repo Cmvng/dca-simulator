@@ -33,12 +33,15 @@ realistic market conditions, compare it with lump-sum deployment, and share or t
 ```bash
 npm install
 npm run dev        # Vite dev server — /api/coins is served locally by a dev middleware
-npm test           # engine unit + invariant tests (node --test, no extra deps)
+npm test           # 40 unit/invariant tests incl. behavior locks (node --test)
 npm run build      # production build
 ```
 
-Deployment target is **Vercel**: static Vite build + one Edge Function (`api/coins.js`).
-Optional env var: `COINGECKO_API_KEY` (CoinGecko demo key).
+Deployments: **Railway** (current production — `server.js` serves the build,
+`/api/coins` and `/api/plans`; volume-backed `PLANS_DIR=/data`) or **Vercel**
+(static build + edge function; public-plan links gracefully fall back to hash
+links there). Optional env: `COINGECKO_API_KEY`. Design law: `DESIGN.md`
+("CLEAR BLUE"). Gate harnesses: `npm run smoke`, `npm run e2e:plans`.
 
 ## Architecture
 

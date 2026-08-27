@@ -79,3 +79,30 @@
   shareable plan URLs, analytics layer, 365-day API history, staleness labels, local dev API,
   a11y/mobile pass, Playwright smoke QA. Not deployed; no PR opened. v1 known issues from the first
   session (blacklist dead code, stale comments, scenario label basis) resolved by the refactor.
+
+
+## Design + platform decisions (2026-08-27, redesign runs)
+
+| Decision | Reason |
+|---|---|
+| Design law lives in DESIGN.md; current system = "CLEAR BLUE" (light, shades-of-blue, soft floating cards, pills, Plus Jakarta Sans, one #2E6BF0 accent, semantic up/down only; amber #F7A23B only as the mid scenario-bar) | Owner-provided spec; replaced the interim "INSTRUMENT" look the same day (both green-theme and instrument styles are retired) |
+| theme.js keeps stable export names across re-themes (T, monoLabel, monoFigure, body, card, btnPrimary…) | 29 consumers migrate mechanically; a re-skin never breaks the build mid-stage |
+| Engine outputs frozen by behaviorLock.test.js + v1 oracle; visual runs never bump MODEL_VERSION | Saved plans stay attributable; redesigns provably change zero numbers |
+| MCR-001 (integer-cent money) raised, NOT implemented | Any integer rounding moves locked outputs; requires explicit owner sign-off + model v3 |
+| /plan/<id> public pages: JSON-file KV in api/plans.js, sha256-hashed owner tokens, validated configs, PLANS_DIR env (Railway volume at /data) | Zero external dependencies; single-instance file store is right-sized; swap to hosted KV only if replicas ever exist |
+| Mascot: placeholder SVG at src/assets/mascot.svg, allowed ONLY in empty/loading states + share-card avatar/corner, never behind data | Brand green clashes with the blue UI; official artwork should replace the file (same path) |
+| Deploy target: Railway service `web` (project cmvng-dca-simulator) auto-deploys pushes to feat/cmvng-v2-upgrade; owner's standing instruction: "always deploy" green work | Work happens on side branches; only final-gate states are merged into the deployed branch |
+| Repo gate harnesses: tools/smoke.mjs (13-step UI smoke) + tools/plans-e2e.mjs (public-plan lifecycle); CI = lint+test+build via GitHub Actions | Every gate is reproducible by anyone, not just this session |
+
+## Session log (continued)
+
+- **2026-08-27 (afternoon)** — INSTRUMENT redesign run (orchestrated, 5 gates): modular re-skin,
+  ScenarioRuler/BuyBarcode, eslint baseline, behaviorLock test, smoke harness. Deployed to Railway
+  (project cmvng-dca-simulator) at web-production-84b5c.up.railway.app after owner said
+  "always deploy".
+- **2026-08-27 (evening)** — CLEAR BLUE finishing run (gates A/B/C on feat/cmvng-clear-blue,
+  merged to feat/cmvng-v2-upgrade → auto-deploy): full re-skin per new DESIGN.md, scenario bars
+  replace the ruler, share cards re-skinned (mascot avatar), /plan/<id> public pages implemented
+  (+9 tests → 40/40), CI added, legacy bridge removed, perf measured, MCR-001 raised and left
+  open. Railway volume plans-data mounted at /data with PLANS_DIR=/data. Live traffic verified
+  (real CoinGecko 200s, new bundle served).

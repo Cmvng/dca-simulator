@@ -9,7 +9,8 @@
     "start": "node server.js",
     "test": "node --test 'src/**/*.test.js'",
     "lint": "eslint .",
-    "smoke": "node tools/smoke.mjs"
+    "smoke": "node tools/smoke.mjs",
+    "e2e:plans": "node tools/plans-e2e.mjs"
   },
   "dependencies": {
     "react": "^18.2.0",

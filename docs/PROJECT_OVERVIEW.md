@@ -141,3 +141,23 @@ pages; share links are client-encoded only.
 ---
 
 *Updated 2026-08-27 during the v2 upgrade on branch `claude/project-docs-checkpoint-ywkwop`.*
+
+
+---
+
+## Addendum — 2026-08-27 redesign runs (current state)
+
+The UI described above was subsequently re-skinned twice in one day; the
+current system is **CLEAR BLUE** (see DESIGN.md): light blue-grey backdrop,
+floating white cards, Plus Jakarta Sans, pill chips, one #2E6BF0 accent,
+hero numeral + delta badge, scenario stress-test bars, three-cell robustness.
+New since the original write-up: `src/components/results/ScenarioBars.jsx`
+(replaces the scenario grid/ruler), `src/components/AssumptionsDrawer.jsx`,
+`src/components/PublicPlanView.jsx`, brand assets in `src/assets/`,
+server-stored public plans (`api/plans.js` + `src/lib/planApi.js`,
+docs/PUBLIC_PLANS.md), ESLint + GitHub Actions CI, gate harnesses
+`tools/smoke.mjs` and `tools/plans-e2e.mjs`, `behaviorLock.test.js`
+(engine outputs frozen — 40/40 tests), and a standalone `server.js` used by
+the Railway deployment (volume-backed PLANS_DIR=/data). The simulation engine
+itself is unchanged from the description above; docs/MCR-001 tracks the one
+open methodology question (integer-cent money).
