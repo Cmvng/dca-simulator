@@ -1,22 +1,25 @@
-// Scenario-mode results page — Phase 56 hierarchy:
-// plan → market → outcome → scenarios → reality check → comparison → risk →
-// entries chart/timeline → share/save → methodology.
+// Scenario-mode results page — INSTRUMENT sheet. Hierarchy unchanged:
+// plan → market → outcome → scenarios → reality check → robustness →
+// comparison → conditions → risk → distribution → entries → timeline →
+// wait-for-dip → share/save → methodology.
+// One hero numeral; everything else whispers in hairlines and mono.
 
 import React, { Suspense, useMemo } from "react";
-import { G, card, secLabel } from "../../styles/theme.js";
-import { InfoRow } from "../ui.jsx";
+import { T, MONO, HAIRLINE, monoLabel, body, plColor } from "../../styles/theme.js";
+import { Section, SpecRow, Numeral, useCountUp } from "../ui.jsx";
 import { Skeleton } from "../LoadingState.jsx";
 import { fmtUSD, fmtPrice, fmtTok, fmtUSDPrecise } from "../../lib/formatting/money.js";
 import { fmtPct } from "../../lib/formatting/percentage.js";
 import { marketConditions } from "../../lib/simulation/scoring.js";
 import MarketSnapshot from "./MarketSnapshot.jsx";
-import ScenarioGrid from "./ScenarioGrid.jsx";
+import ScenarioRuler from "./ScenarioRuler.jsx";
 import RealityCheck from "./RealityCheck.jsx";
 import MarketConditions from "./MarketConditions.jsx";
 import StrategyComparison from "./StrategyComparison.jsx";
 import RollingWindows from "./RollingWindows.jsx";
 import { TargetPriceCard, BreakEvenCard, DrawdownCard } from "./RiskCards.jsx";
 import PortfolioChart from "./PortfolioChart.jsx";
+import BuyBarcode from "./BuyBarcode.jsx";
 import DcaTimeline from "./DcaTimeline.jsx";
 import WaitForDip from "./WaitForDip.jsx";
 import Methodology from "./Methodology.jsx";
@@ -32,127 +35,117 @@ export default function ResultsView({ sim, selected, analysis, live, history, ta
   const hasFees = sim.totalFees > 0;
   const aggressive = sim.reality?.ok && (sim.reality.label === "Ambitious" || sim.reality.label === "Extreme");
 
+  // ONE count-up on results reveal — the hero numeral only.
+  const heroVal = useCountUp(sim.targetVal);
+  const profit = sim.targetProfit;
+
   return (
     <>
       {/* ── YOUR PLAN ── */}
-      <section style={card} aria-label="Your DCA plan">
-        <div style={secLabel}>Your DCA plan · {symbol}</div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 14, fontWeight: 700, color: G.text }}>
-          <span>{fmtUSD(sim.totalInvested)} deployed</span>
-          <span aria-hidden="true" style={{ color: G.border }}>·</span>
-          <span>{sim.entries} purchases</span>
-          <span aria-hidden="true" style={{ color: G.border }}>·</span>
-          <span>{sim.windowDays} days</span>
-          <span aria-hidden="true" style={{ color: G.border }}>·</span>
-          <span>≈ {fmtUSDPrecise(sim.amtPer)} each</span>
-          {hasFees && (<><span aria-hidden="true" style={{ color: G.border }}>·</span><span style={{ color: G.amber }}>fees {fmtUSD(sim.totalFees)}</span></>)}
+      <Section ariaLabel="Your DCA plan" label={`your dca plan · ${selected.symbol.toLowerCase()}`}>
+        <SpecRow label="Deployed">{fmtUSD(sim.totalInvested)}</SpecRow>
+        <SpecRow label="Purchases">{sim.entries}</SpecRow>
+        <SpecRow label="Duration">{sim.windowDays} days</SpecRow>
+        <SpecRow label="Per purchase" last={!hasFees}>≈ {fmtUSDPrecise(sim.amtPer)}</SpecRow>
+        {hasFees && <SpecRow label="Fees" last>{fmtUSD(sim.totalFees)}</SpecRow>}
+        <div style={{ ...body, marginTop: 10 }}>
+          historical sample: last {sim.windowDays} days · entries modeled on that window scaled to the live price (see methodology)
         </div>
-        <div style={{ fontSize: 12, color: G.muted, marginTop: 6 }}>
-          Historical sample used: last {sim.windowDays} days · entries modeled on that window scaled to the live price (see methodology)
-        </div>
-      </section>
+      </Section>
 
       {/* ── CURRENT MARKET ── */}
-      <section style={card} aria-label="Current market">
-        <div style={secLabel}>Current market</div>
+      <Section ariaLabel="Current market" label="current market">
         <MarketSnapshot analysis={analysis} live={live} history={history} />
-      </section>
+      </Section>
 
-      {/* ── YOUR SIMULATED OUTCOME ── */}
-      <section aria-label="Your simulated outcome" style={{ borderRadius: 18, padding: "24px", marginBottom: 14, background: "linear-gradient(135deg,#F0FDF4,#DCFCE7)", border: `2px solid ${G.greenBorder}` }}>
-        <div style={{ fontSize: 12, fontWeight: 800, color: G.green, letterSpacing: 1.5, textTransform: "uppercase" }}>
-          🎯 Your target scenario
+      {/* ── YOUR SIMULATED OUTCOME — the hero ── */}
+      <Section ariaLabel="Your simulated outcome">
+        <div style={{ ...monoLabel, marginBottom: 14 }}>
+          if {selected.name.toLowerCase()} reaches {fmtPrice(sim.targetPrice)} (+{targetPct}%)
         </div>
-        <div style={{ fontSize: 13, color: G.muted, marginTop: 4 }}>
-          IF {symbol} reaches {fmtPrice(sim.targetPrice)} (+{targetPct}%) — your chosen test case, not a forecast
+        <Numeral size={60}>{fmtUSD(heroVal)}</Numeral>
+        <div style={{ fontFamily: MONO, fontSize: 13, fontVariantNumeric: "tabular-nums", marginTop: 12, color: T.ink3 }}>
+          <span style={{ color: plColor(profit) }}>{profit >= 0 ? "+" : "−"}{fmtUSD(Math.abs(profit))}</span>
+          {" · "}
+          <span style={{ color: plColor(profit) }}>{sim.targetROI >= 0 ? "+" : "−"}{Math.abs(sim.targetROI).toFixed(0)}%</span>
+          {" · a scenario, not a forecast"}
         </div>
-        <div style={{ fontSize: "clamp(36px,6vw,54px)", fontWeight: 900, lineHeight: 1.05, margin: "8px 0 4px", color: G.green }}>
-          {fmtUSD(sim.targetVal)}
-        </div>
-        <div style={{ fontSize: 16, fontWeight: 800, color: G.dark, marginBottom: aggressive ? 12 : 0 }}>
-          You'd profit <span style={{ color: G.green }}>+{fmtUSD(sim.targetProfit)}</span> on {fmtUSD(sim.totalInvested)} invested
-          <span style={{ background: G.green, color: "#fff", borderRadius: 20, padding: "2px 12px", fontSize: 14, marginLeft: 8 }}>+{sim.targetROI.toFixed(0)}%</span>
-        </div>
-        {aggressive && (
-          <div style={{ background: G.amberPale, border: `1px solid ${G.amberBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 13, color: G.amber }}>
-            ⚠️ The Reality Check below rates this target <strong>{sim.reality.label}</strong> for a {sim.windowDays}-day window.
-          </div>
-        )}
-        <div style={{ marginTop: 14 }}>
+        <div style={{ marginTop: 16 }}>
           <TargetPriceCard refPrice={sim.refPrice} targetPrice={sim.targetPrice} targetPct={targetPct} symbol={symbol} />
         </div>
-      </section>
+        {aggressive && (
+          <div style={{ ...body, marginTop: 10 }}>
+            the reality check below rates this target {sim.reality.label.toLowerCase()} for a {sim.windowDays}-day window.
+          </div>
+        )}
+      </Section>
 
       {/* ── SCENARIOS ── */}
-      <section style={card} aria-label="Scenarios">
-        <div style={secLabel}>Scenarios — how this plan ends under different moves</div>
-        <ScenarioGrid scenarios={sim.scenarios} totalInvested={sim.totalInvested} />
-      </section>
+      <Section ariaLabel="Scenarios" label={`outcome ruler · ${sim.windowDays}-day window`}>
+        <ScenarioRuler scenarios={sim.scenarios} totalInvested={sim.totalInvested} />
+      </Section>
 
       {/* ── REALITY CHECK ── */}
       {sim.reality?.ok && (
-        <section style={card} aria-label="Reality check">
-          <div style={secLabel}>Reality check</div>
+        <Section ariaLabel="Reality check" label="reality check">
           <RealityCheck reality={sim.reality} windowDays={sim.windowDays} />
-        </section>
+        </Section>
       )}
 
       {/* ── ROBUSTNESS ── */}
       {sim.rolling?.ok && (
-        <section style={card} aria-label="Historical robustness">
-          <div style={secLabel}>If history repeated — best, median, worst</div>
+        <Section ariaLabel="Historical robustness" label="if history repeated · best, median, worst">
           <RollingWindows rolling={sim.rolling} windowDays={sim.windowDays} />
-        </section>
+        </Section>
       )}
 
       {/* ── DCA vs LUMP SUM ── */}
-      <section style={card} aria-label="DCA versus lump sum">
-        <div style={secLabel}>DCA vs hybrid vs lump sum</div>
+      <Section ariaLabel="DCA versus lump sum" label="dca vs hybrid vs lump sum">
         <StrategyComparison comparison={sim.comparison} targetPct={targetPct} capital={sim.config.capital} />
-      </section>
+      </Section>
 
       {/* ── MARKET CONDITIONS ── */}
-      <section style={card} aria-label="Market conditions">
-        <div style={secLabel}>Market conditions — behind the verdict</div>
+      <Section ariaLabel="Market conditions" label="market conditions · behind the verdict">
         <MarketConditions conditions={conditions} analysis={analysis} />
-      </section>
+      </Section>
 
       {/* ── RISK ── */}
-      <section style={card} aria-label="Risk">
-        <div style={secLabel}>Risk</div>
+      <Section ariaLabel="Risk" label="risk">
         <DrawdownCard drawdown={sim.drawdown} mode="scenario" />
-        <div style={{ height: 1, background: G.border, margin: "14px 0" }} />
+        <div style={{ borderTop: HAIRLINE, margin: "16px 0" }} />
         <BreakEvenCard breakEven={sim.breakEven} refPrice={sim.refPrice} hasFees={hasFees} />
-      </section>
+      </Section>
 
       {/* ── DISTRIBUTION MODE (advanced) ── */}
       {sim.config && sim.monteCarloOn && (
-        <section style={card} aria-label="Distribution of outcomes">
-          <div style={secLabel}>Distribution mode · 10,000 paths</div>
+        <Section ariaLabel="Distribution of outcomes" label="distribution mode · 10,000 paths">
           <Suspense fallback={<Skeleton height={140} />}>
             <MonteCarloCard sim={sim} seed={sim.seed} />
           </Suspense>
-        </section>
+        </Section>
       )}
 
       {/* ── ENTRIES ── */}
-      <section style={card} aria-label="Your entries">
-        <div style={secLabel}>Your entries — simulated path</div>
+      <Section ariaLabel="Your entries" label={`price path · ${sim.windowDays}-day sample`}>
         <PortfolioChart series={sim.series} avgEntry={sim.avgEntry} mode="scenario" />
-        <div style={{ marginTop: 12 }}>
-          <InfoRow label="Entry price range">{fmtPrice(sim.simLow)} – {fmtPrice(sim.simHigh)}</InfoRow>
-          <InfoRow label="Window volatility">{sim.volPct.toFixed(1)}%</InfoRow>
-          <InfoRow label="Avg entry (vol-adjusted)">
-            <span style={{ color: sim.avgEntry <= sim.refPrice ? G.green : G.amber }}>
-              {fmtPrice(sim.avgEntry)} {sim.avgEntry < sim.refPrice ? "(below live ↓)" : "(above live ↑)"}
-            </span>
-          </InfoRow>
-          <InfoRow label={`Total ${symbol} accumulated`}>{fmtTok(sim.units)}</InfoRow>
-          <InfoRow label="Value at live price" last>
-            <span style={{ color: sim.currentROI >= 0 ? G.green : G.red }}>{fmtUSD(sim.currentVal)} ({fmtPct(sim.currentROI)})</span>
-          </InfoRow>
+        <div style={{ marginTop: 10 }}>
+          <BuyBarcode entries={sim.entries} madeCount={0} currentIndex={0} />
+          <div style={{ ...monoLabel, marginTop: 6, marginBottom: 0 }}>
+            the machined scale: one tick per scheduled buy · the tall tick is today
+          </div>
         </div>
-      </section>
+        <div style={{ marginTop: 14 }}>
+          <SpecRow label="Entry price range">{fmtPrice(sim.simLow)} – {fmtPrice(sim.simHigh)}</SpecRow>
+          <SpecRow label="Window volatility">{sim.volPct.toFixed(1)}%</SpecRow>
+          <SpecRow label="Avg entry (vol-adjusted)">
+            {fmtPrice(sim.avgEntry)} {sim.avgEntry < sim.refPrice ? "(below live ↓)" : "(above live ↑)"}
+          </SpecRow>
+          <SpecRow label={`Total ${symbol} accumulated`}>{fmtTok(sim.units)}</SpecRow>
+          <SpecRow label="Value at live price" last>
+            <span style={{ color: plColor(sim.currentROI) }}>{fmtUSD(sim.currentVal)} ({fmtPct(sim.currentROI)})</span>
+          </SpecRow>
+        </div>
+      </Section>
 
       <DcaTimeline series={sim.series} symbol={symbol} hasFees={hasFees} />
 

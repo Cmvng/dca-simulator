@@ -2,17 +2,18 @@
 // readers; every mode and assumption disclosed.
 
 import React from "react";
-import { G } from "../../styles/theme.js";
+import { T, monoLabel, body } from "../../styles/theme.js";
 import { Collapsible } from "../ui.jsx";
 import { MODEL_LABEL } from "../../lib/version.js";
 
-const H = ({ children }) => <div style={{ fontSize: 13, fontWeight: 800, color: G.sub, margin: "12px 0 4px" }}>{children}</div>;
-const P = ({ children }) => <p style={{ fontSize: 13, color: G.muted, lineHeight: 1.7, margin: "0 0 4px" }}>{children}</p>;
+const H = ({ children }) => <div style={{ ...monoLabel, color: T.ink2, margin: "12px 0 4px" }}>{children}</div>;
+const P = ({ children }) => <p style={{ ...body, margin: "0 0 4px" }}>{children}</p>;
+const Strong = ({ children }) => <span style={{ fontWeight: 500, color: T.ink }}>{children}</span>;
 
 export default function Methodology({ mode = "scenario" }) {
   return (
     <Collapsible title="How CMVNG calculates this" subtitle={`${MODEL_LABEL} · scenario simulator, not a prediction of future returns`}>
-      <P><strong>This is a scenario simulator, not a prediction of future returns.</strong> Historical data is evidence for stress-testing a plan — it does not tell you what will happen next.</P>
+      <P><Strong>This is a scenario simulator, not a prediction of future returns.</Strong> Historical data is evidence for stress-testing a plan — it does not tell you what will happen next.</P>
 
       <H>1. Data source</H>
       <P>Market data comes from CoinGecko: the top 250 coins by market cap (stablecoins and wrapped/staked tokens excluded), live prices refreshed about every 30–60 seconds, and up to 365 days of daily closing prices. Every data panel shows when its data was last updated; stale cached data is labeled.</P>

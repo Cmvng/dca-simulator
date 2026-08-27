@@ -3,28 +3,36 @@
 // outcomes, explicitly NOT probabilities.
 
 import React from "react";
-import { G } from "../../styles/theme.js";
+import { T, MONO, HAIRLINE, monoLabel, body, plColor } from "../../styles/theme.js";
 import { fmtPct } from "../../lib/formatting/percentage.js";
+
+// stat stack: mono whisper label over a mono tabular figure. Each carries a
+// left hairline; the wrapper clips the line-leading ones so dividers only
+// appear between stacks — and the row wraps instead of overflowing at 320px.
+const Stat = ({ label, v }) => (
+  <div style={{ flex: "1 1 96px", borderLeft: HAIRLINE, padding: "2px 12px" }}>
+    <div style={{ ...monoLabel, marginBottom: 6 }}>{label}</div>
+    <div style={{ fontFamily: MONO, fontSize: 20, fontVariantNumeric: "tabular-nums", fontWeight: 400, color: plColor(v) }}>
+      {fmtPct(v)}
+    </div>
+  </div>
+);
 
 export default function RollingWindows({ rolling, windowDays }) {
   if (!rolling?.ok) return null;
-  const cell = (label, v, color) => (
-    <div style={{ flex: 1, minWidth: 100, background: G.surfaceAlt, border: `1px solid ${G.border}`, borderRadius: 12, padding: "12px 14px", textAlign: "center" }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: G.muted, textTransform: "uppercase", letterSpacing: 1 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 900, color, marginTop: 4 }}>{fmtPct(v)}</div>
-    </div>
-  );
   return (
     <div>
-      <div style={{ fontSize: 13, color: G.muted, marginBottom: 10, lineHeight: 1.5 }}>
-        The same {windowDays}-day plan, run over <strong style={{ color: G.text }}>{rolling.count} different historical {windowDays}-day windows</strong> from the past year (weekly steps, real prices, each valued at its own window's final price):
+      <div style={{ ...body, marginBottom: 12 }}>
+        The same {windowDays}-day plan, run over <span style={{ fontWeight: 500, color: T.ink }}>{rolling.count} different historical {windowDays}-day windows</span> from the past year (weekly steps, real prices, each valued at its own window's final price):
       </div>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        {cell("Best window", rolling.best, G.green)}
-        {cell("Median window", rolling.median, rolling.median >= 0 ? G.green2 : G.amber)}
-        {cell("Worst window", rolling.worst, G.red)}
+      <div style={{ overflow: "hidden" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", rowGap: 14, marginLeft: -13 }}>
+          <Stat label="best window" v={rolling.best} />
+          <Stat label="median window" v={rolling.median} />
+          <Stat label="worst window" v={rolling.worst} />
+        </div>
       </div>
-      <div style={{ fontSize: 12, color: G.muted, marginTop: 10 }}>
+      <div style={{ ...body, color: T.ink3, marginTop: 12 }}>
         These are historical outcomes, not probabilities — the coming {windowDays} days are not drawn from this list.
       </div>
     </div>

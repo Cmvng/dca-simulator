@@ -2,7 +2,7 @@
 // price. The winner depends on the price path; no blanket claims.
 
 import React, { useEffect } from "react";
-import { G } from "../../styles/theme.js";
+import { T, SANS, MONO, monoFigure, body, plColor, HAIRLINE_2 } from "../../styles/theme.js";
 import { fmtUSD, fmtPrice } from "../../lib/formatting/money.js";
 import { fmtPct } from "../../lib/formatting/percentage.js";
 import { track } from "../../lib/analytics.js";
@@ -17,36 +17,34 @@ export default function StrategyComparison({ comparison, targetPct, capital }) {
 
   return (
     <div>
-      <div style={{ fontSize: 13, color: G.muted, marginBottom: 10, lineHeight: 1.5 }}>
+      <div style={{ ...body, marginBottom: 6 }}>
         Same {fmtUSD(capital)}, same coin, all valued at your +{targetPct}% target price. Lump sum enters everything at today's live price; DCA spreads entries over the simulated path.
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
-        {comparison.map(s => {
-          const isBest = s.id === best.id;
-          return (
-            <div key={s.id} style={{
-              background: isBest ? G.greenPale : G.surfaceAlt,
-              border: `1.5px solid ${isBest ? G.green : G.border}`,
-              borderRadius: 14, padding: "13px 15px",
-            }}>
-              <div style={{ fontSize: 12, fontWeight: 800, color: isBest ? G.green : G.sub, display: "flex", justifyContent: "space-between", gap: 6 }}>
-                <span>{s.name}</span>
-                {isBest && <span aria-label="best under this scenario">▲ ahead</span>}
-              </div>
-              <div style={{ fontSize: 21, fontWeight: 900, color: G.dark, margin: "6px 0 2px" }}>{fmtUSD(s.valueAtTarget)}</div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: s.roiAtTarget >= 0 ? G.green : G.red }}>{fmtPct(s.roiAtTarget)}</div>
-              <div style={{ fontSize: 12, color: G.muted, marginTop: 6, lineHeight: 1.5 }}>
-                Avg entry {fmtPrice(s.avgEntry)}
+      {comparison.map((s, i) => {
+        const isBest = s.id === best.id;
+        return (
+          <div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "10px 0", borderBottom: i === comparison.length - 1 ? "none" : HAIRLINE_2 }}>
+            <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: isBest ? 500 : 400, color: T.ink }}>
+              {s.name}
+              {isBest && (
+                <span aria-label="best under this scenario" style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.05em", color: T.ink3 }}> · ahead</span>
+              )}
+            </span>
+            <span style={{ textAlign: "right" }}>
+              <div style={monoFigure}>{fmtUSD(s.valueAtTarget)}</div>
+              <div style={{ ...monoFigure, color: plColor(s.roiAtTarget) }}>{fmtPct(s.roiAtTarget)}</div>
+              <div style={{ ...monoFigure, fontSize: 11, color: T.ink3 }}>
+                avg entry {fmtPrice(s.avgEntry)}
                 {s.totalFees > 0 && <> · fees {fmtUSD(s.totalFees)}</>}
               </div>
-            </div>
-          );
-        })}
-      </div>
+            </span>
+          </div>
+        );
+      })}
       {dca && lump && (
-        <div style={{ fontSize: 13, color: G.text, marginTop: 10 }}>
-          Under this scenario, <strong>{diff >= 0 ? "DCA" : "lump sum"}</strong> ends {fmtUSD(Math.abs(diff))} ahead.
-          <span style={{ color: G.muted }}> Which strategy wins depends entirely on the price path — neither always wins.</span>
+        <div style={{ ...body, color: T.ink, marginTop: 10 }}>
+          Under this scenario, <span style={{ fontWeight: 500 }}>{diff >= 0 ? "DCA" : "lump sum"}</span> ends {fmtUSD(Math.abs(diff))} ahead.
+          <span style={{ color: T.ink3 }}> Which strategy wins depends entirely on the price path — neither always wins.</span>
         </div>
       )}
     </div>

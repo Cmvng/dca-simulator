@@ -2,8 +2,7 @@
 // trend. Always timestamped; stale data is labeled.
 
 import React from "react";
-import { G } from "../../styles/theme.js";
-import { InfoRow, PctBadge, TrendPill, Staleness } from "../ui.jsx";
+import { SpecRow, SignedPct, TrendPill, Staleness, Numeral } from "../ui.jsx";
 import { fmtPrice } from "../../lib/formatting/money.js";
 
 export default function MarketSnapshot({ analysis, live, history }) {
@@ -18,21 +17,21 @@ export default function MarketSnapshot({ analysis, live, history }) {
   const price = live?.price ?? analysis.cur;
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
-        <span style={{ fontSize: 26, fontWeight: 900, color: G.dark }}>{fmtPrice(price)}</span>
-        {live && <PctBadge val={live.change24h} />}
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+        <Numeral size={28}>{fmtPrice(price)}</Numeral>
+        {live && <SignedPct val={live.change24h} />}
         <Staleness fetchedAt={live?.fetchedAt || history?.fetchedAt} stale={live?.stale || history?.stale} />
       </div>
-      {live && <InfoRow label="24h change"><PctBadge val={live.change24h} /></InfoRow>}
-      {c7 !== null && <InfoRow label="7d change"><PctBadge val={c7} /></InfoRow>}
-      {c30 !== null && <InfoRow label="30d change"><PctBadge val={c30} /></InfoRow>}
-      <InfoRow label={`Position in ${analysis.windowDays}-day range`}>
+      {live && <SpecRow label="24h change"><SignedPct val={live.change24h} /></SpecRow>}
+      {c7 !== null && <SpecRow label="7d change"><SignedPct val={c7} /></SpecRow>}
+      {c30 !== null && <SpecRow label="30d change"><SignedPct val={c30} /></SpecRow>}
+      <SpecRow label={`Position in ${analysis.windowDays}-day range`}>
         {analysis.nearLow < 0.35 ? "Lower part" : analysis.nearLow > 0.75 ? "Upper part" : "Middle"}
-      </InfoRow>
-      <InfoRow label="Volatility (30d, % of price)">
+      </SpecRow>
+      <SpecRow label="Volatility (30d, % of price)">
         {analysis.volPct > 8 ? "High" : analysis.volPct > 4 ? "Elevated" : "Normal"} · {analysis.volPct.toFixed(1)}%
-      </InfoRow>
-      <InfoRow label="Trend" last><TrendPill trend={analysis.trend} /></InfoRow>
+      </SpecRow>
+      <SpecRow label="Trend" last><TrendPill trend={analysis.trend} /></SpecRow>
     </div>
   );
 }
