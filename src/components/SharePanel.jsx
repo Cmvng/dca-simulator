@@ -2,7 +2,7 @@
 // Loaded lazily — canvas code stays out of the initial bundle.
 
 import React, { useState } from "react";
-import { G, inp, card } from "../styles/theme.js";
+import { inp, card } from "../styles/theme.js";
 import { Spinner } from "./ui.jsx";
 import { makeCard, CARD_FORMATS } from "../lib/sharing/shareCard.js";
 import { planShareUrl } from "../lib/planUrl.js";

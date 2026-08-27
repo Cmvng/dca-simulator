@@ -23,7 +23,7 @@ import Methodology from "./Methodology.jsx";
 
 const MonteCarloCard = React.lazy(() => import("./MonteCarloCard.jsx"));
 
-export default function ResultsView({ sim, selected, analysis, live, history, targetPct, months, shareSlot, shareRef }) {
+export default function ResultsView({ sim, selected, analysis, live, history, targetPct, shareSlot, shareRef }) {
   const symbol = selected.symbol.toUpperCase();
   const conditions = useMemo(
     () => analysis ? marketConditions(analysis, sim.reality?.ok ? sim.reality : null) : null,
@@ -55,7 +55,7 @@ export default function ResultsView({ sim, selected, analysis, live, history, ta
       {/* ── CURRENT MARKET ── */}
       <section style={card} aria-label="Current market">
         <div style={secLabel}>Current market</div>
-        <MarketSnapshot analysis={analysis} live={live} selected={selected} history={history} />
+        <MarketSnapshot analysis={analysis} live={live} history={history} />
       </section>
 
       {/* ── YOUR SIMULATED OUTCOME ── */}

@@ -3,13 +3,12 @@
 // the Methodology panel. Never phrased as a probability.
 
 import React from "react";
-import { G, TONES } from "../../styles/theme.js";
+import { G } from "../../styles/theme.js";
 import { fmtPct } from "../../lib/formatting/percentage.js";
 import { InfoRow, ToneBadge } from "../ui.jsx";
 
 export default function RealityCheck({ reality, windowDays }) {
   if (!reality?.ok) return null;
-  const [c] = TONES[reality.tone] || TONES.warn;
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>

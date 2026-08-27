@@ -6,7 +6,7 @@ import { G } from "../../styles/theme.js";
 import { InfoRow, PctBadge, TrendPill, Staleness } from "../ui.jsx";
 import { fmtPrice } from "../../lib/formatting/money.js";
 
-export default function MarketSnapshot({ analysis, live, selected, history }) {
+export default function MarketSnapshot({ analysis, live, history }) {
   if (!analysis) return null;
   const vals = history?.prices?.map(p => p[1]) || [];
   const chg = days => {

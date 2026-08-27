@@ -129,7 +129,7 @@ test("comparison uses identical capital and endpoint for all strategies", () => 
   const r = runScenarioSimulation({ capital: 10000, freqId: "weekly", months: 3, targetPct: 50, prices, livePrice: live });
   assert.equal(r.comparison.length, 3);
   const lump = r.comparison.find(c => c.id === "lump");
-  const dca = r.comparison.find(c => c.id === "dca");
+  
   const hybrid = r.comparison.find(c => c.id === "hybrid");
   // Lump sum invests everything at live price.
   close(lump.units, 10000 / live, "lump units");
