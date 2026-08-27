@@ -240,7 +240,7 @@ function drawFooter({ ctx, W, H, format }, g) {
   ctx.textAlign = "left";
   if (format === "story" && g.cta) {
     ctx.font = sans(g.ctaFs, 700); ctx.fillStyle = T.blue; ctx.textAlign = "center";
-    ctx.fillText("Build your own plan · cmvng.app", W / 2, cardBottom - g.ctaBase);
+    ctx.fillText("Build your own plan · web-production-84b5c.up.railway.app", W / 2, cardBottom - g.ctaBase);
     ctx.textAlign = "left";
   }
   return y;
