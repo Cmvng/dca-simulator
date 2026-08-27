@@ -1,9 +1,9 @@
 // CMVNG DCA Simulator — app shell and orchestration.
-// UI in src/components (INSTRUMENT design system — see DESIGN.md), market
+// UI in src/components (CLEAR BLUE design system — see DESIGN.md), market
 // data in src/hooks + src/services, all calculation in src/lib/simulation.
 
 import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { T, SANS, MONO, GLOBAL_CSS, btnPrimary, btnSecondary, btnOption, body } from "./styles/theme.js";
+import { T, SANS, GLOBAL_CSS, btnPrimary, btnSecondary, btnOption, body } from "./styles/theme.js";
 import { Section } from "./components/ui.jsx";
 import Header from "./components/Header.jsx";
 import CoinSelector from "./components/CoinSelector.jsx";
@@ -160,15 +160,16 @@ export default function App() {
     : null;
 
   return (
-    <div style={{ minHeight: "100vh", background: T.paper, fontFamily: SANS, color: T.ink, paddingBottom: showSticky ? 96 : 48 }}>
+    <div style={{ minHeight: "100vh", background: T.bg, fontFamily: SANS, color: T.ink, paddingBottom: showSticky ? 104 : 48 }}>
       <style>{GLOBAL_CSS}</style>
 
       {/* sticky action bar after a simulation — one primary, one secondary */}
       {showSticky && (
         <div style={{
           position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100,
-          background: T.paper, borderTop: `0.5px solid ${T.line}`,
-          padding: "10px 16px", display: "flex", gap: 8, alignItems: "stretch",
+          background: T.card, borderRadius: "20px 20px 0 0",
+          boxShadow: "0 -10px 30px -14px rgba(30,60,120,0.35)",
+          padding: "12px 16px", display: "flex", gap: 10, alignItems: "stretch",
         }}>
           {mode === "scenario" && (
             <button onClick={scrollToShare} style={{ ...btnPrimary, flex: 2 }}>
@@ -186,7 +187,7 @@ export default function App() {
       <main style={{ maxWidth: 640, margin: "0 auto", padding: "32px 16px" }}>
 
         {sharedBanner && (
-          <div role="status" style={{ borderTop: `0.5px solid ${T.line}`, borderBottom: `0.5px solid ${T.line}`, padding: "10px 0", marginBottom: 22, ...body, color: T.blueDeep }}>
+          <div role="status" style={{ background: T.blueSoft, borderRadius: 16, padding: "12px 16px", marginBottom: 16, ...body, color: T.blue, fontWeight: 600 }}>
             A shared plan was loaded from your link — review it below, then run the simulation.
           </div>
         )}
@@ -206,8 +207,8 @@ export default function App() {
 
         {/* hero */}
         <div style={{ marginBottom: 36 }}>
-          <h1 style={{ fontFamily: SANS, fontSize: "clamp(26px,5vw,38px)", fontWeight: 500, color: T.ink, margin: 0, lineHeight: 1.15, letterSpacing: "-0.03em" }}>
-            Build a crypto DCA plan.<br />Stress-test it against real data.
+          <h1 style={{ fontFamily: SANS, fontSize: "clamp(27px,5.4vw,40px)", fontWeight: 700, color: T.ink, margin: 0, lineHeight: 1.18, letterSpacing: "-0.02em" }}>
+            Build a crypto DCA plan.<br /><span style={{ color: T.blue }}>Stress-test it against real data.</span>
           </h1>
           <p style={{ ...body, marginTop: 12, marginBottom: 0 }}>
             Pick a coin, set your plan, test scenarios. A decision tool — not a prediction.
@@ -215,7 +216,7 @@ export default function App() {
         </div>
 
         {/* STEP 1 — coin */}
-        <Section label="step 1 · choose your coin" ariaLabel="Step 1: choose your coin">
+        <Section label="Step 1 · Choose your coin" eyebrow ariaLabel="Step 1: choose your coin">
           {coinsApi.loading ? (
             <ProgressLoading label="Loading top 250 coins…" progress={coinsApi.progress} />
           ) : coinsApi.error ? (
@@ -231,7 +232,7 @@ export default function App() {
         </Section>
 
         {/* STEP 2 — plan */}
-        <Section label="step 2 · build your plan" ariaLabel="Step 2: build your plan">
+        <Section label="Step 2 · Build your plan" eyebrow ariaLabel="Step 2: build your plan">
           <CapitalInput capital={capital} onChange={setCapital} />
           <FrequencySelector freqId={freqId} months={safeMo} onChange={setFreqId} />
           <DurationSelector months={safeMo} maxMonths={maxMo} onChange={setMonths} />
@@ -243,14 +244,14 @@ export default function App() {
           {/* mode switch */}
           <div role="radiogroup" aria-label="Simulation mode" style={{ display: "flex", gap: 8, marginTop: 14 }}>
             {[
-              { id: "scenario", label: "Scenario simulation", desc: "anchored to the live price" },
-              { id: "backtest", label: "Historical backtest", desc: "real past prices and dates" },
+              { id: "scenario", label: "Scenario simulation", desc: "Anchored to the live price" },
+              { id: "backtest", label: "Historical backtest", desc: "Real past prices and dates" },
             ].map(m => (
               <button key={m.id} role="radio" aria-checked={mode === m.id}
                 onClick={() => { setMode(m.id); simApi.reset(); if (m.id === "backtest") track("historical_backtest_opened", {}); }}
-                style={{ ...btnOption(mode === m.id), flex: 1, textAlign: "left" }}>
-                <span style={{ display: "block", fontSize: 13 }}>{m.label}</span>
-                <span style={{ display: "block", fontFamily: MONO, fontSize: 11, letterSpacing: "0.03em", color: T.ink3, marginTop: 3 }}>{m.desc}</span>
+                style={{ ...btnOption(mode === m.id), borderRadius: 16, flex: 1, textAlign: "left", padding: "12px 14px" }}>
+                <span style={{ display: "block", fontSize: 13.5, fontWeight: 700 }}>{m.label}</span>
+                <span style={{ display: "block", fontSize: 12, fontWeight: 500, color: T.ink3, marginTop: 3 }}>{m.desc}</span>
               </button>
             ))}
           </div>
@@ -266,7 +267,7 @@ export default function App() {
                 </div>
               ) : (
                 <select id="bt-start" value={backtestOffsetMonths} onChange={e => setBacktestOffsetMonths(Number(e.target.value))}
-                  style={{ width: "100%", padding: "11px 12px", borderRadius: 2, border: `1px solid ${T.line}`, background: T.paper, fontSize: 15, fontFamily: SANS, color: T.ink }}>
+                  style={{ width: "100%", padding: "12px 14px", borderRadius: 14, border: `1px solid ${T.line}`, background: T.card, fontSize: 15, fontFamily: SANS, fontWeight: 500, color: T.ink }}>
                   {backtestOptions.map(m => (
                     <option key={m} value={m}>{m} month{m > 1 ? "s" : ""} ago</option>
                   ))}
@@ -325,8 +326,8 @@ export default function App() {
           </Suspense>
         )}
 
-        <footer style={{ borderTop: `0.5px solid ${T.line}`, marginTop: 36, paddingTop: 14, paddingBottom: 8, fontFamily: MONO, fontSize: 11, letterSpacing: "0.05em", color: T.ink3 }}>
-          scenario simulator · not financial advice · dyor · data via coingecko · cmvng
+        <footer style={{ marginTop: 32, paddingBottom: 8, textAlign: "center", fontFamily: SANS, fontSize: 12, fontWeight: 500, color: T.ink3 }}>
+          Scenario simulator · Not financial advice · DYOR · Data via CoinGecko · cmvng
         </footer>
       </main>
     </div>

@@ -1,39 +1,47 @@
-// INSTRUMENT primitives — the reusable pieces every screen is built from.
-// Hairlines, mono labels, tabular figures. Nothing ornamental.
+// CLEAR BLUE primitives — soft floating cards, friendly pills, one vivid
+// accent, big tabular numerals. See DESIGN.md.
 
 import React, { useEffect, useRef, useState } from "react";
-import { T, MONO, SANS, HAIRLINE_2, monoLabel, monoFigure, plColor } from "../styles/theme.js";
+import { T, SANS, card, monoLabel, monoFigure, plColor, pillSoft, pillFilled } from "../styles/theme.js";
+import mascotUrl from "../assets/mascot.svg";
 
-// mono whisper label — `outcome ruler`, `price path · 90d sample`
-export function SectionLabel({ children, style = {} }) {
-  return <div style={{ ...monoLabel, marginBottom: 12, ...style }}>{children}</div>;
+// section label — 12px w600 muted; pass eyebrow for the UPPERCASE variant
+export function SectionLabel({ children, eyebrow = false, style = {} }) {
+  return (
+    <div style={{
+      ...monoLabel,
+      ...(eyebrow ? { textTransform: "uppercase", letterSpacing: "0.06em" } : {}),
+      marginBottom: 12, ...style,
+    }}>
+      {children}
+    </div>
+  );
 }
 
-// hairline-separated section (never a card)
-export function Section({ label, ariaLabel, children, style = {} }) {
+// floating white card section
+export function Section({ label, eyebrow = false, ariaLabel, children, style = {} }) {
   return (
-    <section aria-label={ariaLabel || undefined} style={{ borderTop: `0.5px solid ${T.line}`, padding: "18px 0", ...style }}>
-      {label && <SectionLabel>{label}</SectionLabel>}
+    <section aria-label={ariaLabel || undefined} style={{ ...card, ...style }}>
+      {label && <SectionLabel eyebrow={eyebrow}>{label}</SectionLabel>}
       {children}
     </section>
   );
 }
 
-// spec-sheet row: label-left / mono-figure-right
+// stat row: label-left / bold-tabular-value-right
 export function SpecRow({ label, children, last = false }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "8px 0", borderBottom: last ? "none" : HAIRLINE_2 }}>
-      <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 400, color: T.ink2 }}>{label}</span>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "9px 0", borderBottom: last ? "none" : `1px solid ${T.line}` }}>
+      <span style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: 400, color: T.ink2 }}>{label}</span>
       <span style={{ ...monoFigure, textAlign: "right" }}>{children}</span>
     </div>
   );
 }
-// legacy alias — same contract
 export const InfoRow = SpecRow;
 
-// one-shot count-up for the hero numeral (≤400ms, ease-out); honors
+// one-shot count-up for the hero numeral (≤600ms ease-out); honors
 // prefers-reduced-motion by rendering the final value immediately.
-export function useCountUp(target, { duration = 400, enabled = true } = {}) {
+export function useCountUp(target, { duration = 600, enabled = true } = {}) {
   const [display, setDisplay] = useState(() => {
     const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     return (!enabled || reduce) ? target : 0;
@@ -57,28 +65,41 @@ export function useCountUp(target, { duration = 400, enabled = true } = {}) {
   return display;
 }
 
-// giant tabular ink numeral
-export function Numeral({ children, size = 60, color = T.ink, style = {} }) {
+// giant tabular numeral — the loudest thing on any screen
+export function Numeral({ children, size = 58, color = T.ink, style = {} }) {
   return (
     <div style={{
-      fontFamily: SANS, fontSize: size, fontWeight: 500, letterSpacing: "-0.045em",
-      lineHeight: 1, fontVariantNumeric: "tabular-nums", color, ...style,
+      fontFamily: SANS, fontSize: size, fontWeight: 700, letterSpacing: "-0.02em",
+      lineHeight: 1.05, fontVariantNumeric: "tabular-nums", color, ...style,
     }}>
       {children}
     </div>
   );
 }
 
-// THE one permitted pill — Reality Check verdict only. Do not reuse.
-export function Pill({ children }) {
+// rounded delta badge under the hero numeral: "↑ +$5,000 · +50%"
+export function DeltaBadge({ profit, roiPct, suffix }) {
+  const up = profit >= 0;
   return (
-    <span style={{ background: T.paper2, color: T.blueDeep, fontFamily: SANS, fontSize: 12, fontWeight: 500, borderRadius: 999, padding: "3px 10px" }}>
-      {children}
+    <span style={{ ...pillSoft, fontSize: 13, padding: "7px 14px", fontVariantNumeric: "tabular-nums" }}>
+      <span aria-hidden="true">{up ? "↑" : "↓"}</span>
+      <span>{up ? "+" : "−"}{fmtAbsUSD(profit)} · {roiPct >= 0 ? "+" : "−"}{Math.abs(roiPct).toFixed(0)}%{suffix ? ` · ${suffix}` : ""}</span>
     </span>
   );
 }
+function fmtAbsUSD(n) {
+  const a = Math.abs(n);
+  if (a >= 1e6) return `$${(a / 1e6).toFixed(2)}M`;
+  if (a >= 1e3) return `$${a.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+  return `$${a.toFixed(2)}`;
+}
 
-// signed percentage / money figure — color by sign only (semantic P/L)
+// pills — filled (blue) and soft (tint); pills are welcome in CLEAR BLUE
+export function Pill({ children, variant = "soft", style = {} }) {
+  return <span style={{ ...(variant === "filled" ? pillFilled : pillSoft), ...style }}>{children}</span>;
+}
+
+// signed percentage — color by sign only (semantic P/L)
 export function SignedPct({ val, digits = 1 }) {
   return (
     <span style={{ ...monoFigure, color: plColor(val) }}>
@@ -86,35 +107,35 @@ export function SignedPct({ val, digits = 1 }) {
     </span>
   );
 }
-// legacy alias
 export const PctBadge = SignedPct;
 
-// trend as plain text (pills are banned)
+// trend as a soft neutral pill
 export function TrendPill({ trend }) {
-  const label = trend === "Uptrend" ? "uptrend" : trend === "Downtrend" ? "downtrend" : "sideways";
-  return <span style={{ ...monoLabel, color: T.ink2 }}>{label}</span>;
+  const label = trend === "Uptrend" ? "Uptrend" : trend === "Downtrend" ? "Downtrend" : "Sideways";
+  return <span style={{ ...pillSoft, background: T.card2, color: T.ink2 }}>{label}</span>;
 }
 
-// tone words as plain text — gain/loss coloring only where semantic
+// tone words as soft pills — gain/loss color only where semantic
 export function ToneBadge({ tone = "ok", children }) {
-  const color = tone === "good" ? T.gain : tone === "bad" ? T.loss : tone === "warn" ? T.ink2 : T.blueDeep;
-  return <span style={{ fontFamily: MONO, fontSize: 12, color, letterSpacing: "0.03em" }}>{String(children).toLowerCase()}</span>;
+  const color = tone === "good" ? T.gain : tone === "bad" ? T.loss : tone === "warn" ? T.ink2 : T.blue;
+  const bg = tone === "good" ? "rgba(18,183,106,0.12)" : tone === "bad" ? "rgba(240,68,46,0.10)" : tone === "warn" ? T.card2 : T.blueSoft;
+  return <span style={{ ...pillSoft, background: bg, color }}>{children}</span>;
 }
 
 // static working indicator — motion may not loop
 export function Spinner() {
-  return <span aria-hidden="true" style={{ fontFamily: MONO, fontSize: 13 }}>…</span>;
+  return <span aria-hidden="true" style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700 }}>…</span>;
 }
 export function Dot() {
-  return <span aria-hidden="true" style={{ width: 5, height: 5, borderRadius: "50%", background: T.blue, display: "inline-block" }} />;
+  return <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: "50%", background: T.blue, display: "inline-block" }} />;
 }
 
-// coin identity image (data, not decoration) with letter fallback
-export function CoinImg({ src, symbol, size = 28 }) {
+// coin identity image with letter fallback
+export function CoinImg({ src, symbol, size = 30 }) {
   const [err, setErr] = useState(false);
   if (err || !src) {
     return (
-      <div aria-hidden="true" style={{ width: size, height: size, borderRadius: "50%", background: T.paper2, border: `1px solid ${T.line}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontFamily: MONO, fontSize: size * 0.36, color: T.ink2 }}>
+      <div aria-hidden="true" style={{ width: size, height: size, borderRadius: "50%", background: T.card2, border: `1px solid ${T.line}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontFamily: SANS, fontWeight: 700, fontSize: size * 0.34, color: T.ink2 }}>
         {(symbol || "?").slice(0, 2).toUpperCase()}
       </div>
     );
@@ -122,35 +143,53 @@ export function CoinImg({ src, symbol, size = 28 }) {
   return <img src={src} alt="" style={{ width: size, height: size, borderRadius: "50%", flexShrink: 0, objectFit: "cover" }} onError={() => setErr(true)} />;
 }
 
-// accessible collapsible — hairlines only
+// accessible collapsible — soft inset header, lives inside cards
 export function Collapsible({ title, subtitle, defaultOpen = false, children, onOpen }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div style={{ borderTop: `0.5px solid ${T.line}` }}>
+    <div style={{ ...card, padding: 8, marginBottom: 14 }}>
       <button
         onClick={() => { const next = !open; setOpen(next); if (next && onOpen) onOpen(); }}
         aria-expanded={open}
-        style={{ width: "100%", display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, padding: "14px 0", background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}
+        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 14px", background: T.card2, border: "none", borderRadius: 14, cursor: "pointer", textAlign: "left" }}
       >
         <span>
-          <span style={{ ...monoLabel, marginBottom: 0, display: "block" }}>{title}</span>
+          <span style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: 700, color: T.ink, display: "block" }}>{title}</span>
           {subtitle && <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 400, color: T.ink3 }}>{subtitle}</span>}
         </span>
-        <span aria-hidden="true" style={{ fontFamily: MONO, fontSize: 13, color: T.ink3 }}>{open ? "−" : "+"}</span>
+        <span aria-hidden="true" style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, color: T.ink3, transform: open ? "rotate(180deg)" : "none" }}>▾</span>
       </button>
-      {open && <div style={{ paddingBottom: 14 }}>{children}</div>}
+      {open && <div style={{ padding: "14px 14px 8px" }}>{children}</div>}
     </div>
   );
 }
 
-// honest staleness caption — mono whisper
+// honest staleness caption
 export function Staleness({ fetchedAt, stale }) {
   if (!fetchedAt) return null;
   const m = Math.max(0, Math.round((Date.now() - fetchedAt) / 60000));
   const label = m < 1 ? "just now" : `${m} min ago`;
   return (
-    <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.05em", color: stale ? T.ink2 : T.ink3 }}>
-      {stale ? "stale · " : ""}updated {label}
+    <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 500, color: stale ? T.ink2 : T.ink3 }}>
+      {stale ? "stale · " : ""}Updated {label}
     </span>
   );
 }
+
+// the blue offset-bars logo mark (inline; official file can replace it — see src/assets/README.md)
+export function LogoMark({ size = 22 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ display: "block" }}>
+      <rect x="3" y="8" width="4.6" height="13" rx="2.3" fill={T.bluePress} />
+      <rect x="9.7" y="3" width="4.6" height="18" rx="2.3" fill={T.blue} />
+      <rect x="16.4" y="11" width="4.6" height="10" rx="2.3" fill={T.blue} opacity="0.55" />
+    </svg>
+  );
+}
+
+// the green character — brand accent ONLY (empty/loading states, avatars,
+// intro moments). NEVER a background, never behind text or data.
+export function Mascot({ size = 72, style = {} }) {
+  return <img src={mascotUrl} alt="" width={size} height={size} style={{ display: "block", ...style }} />;
+}
+export { mascotUrl };
