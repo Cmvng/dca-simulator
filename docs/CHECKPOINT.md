@@ -139,3 +139,15 @@ the engine is frozen and guarded by `behaviorLock.test.js` + the v1 oracle (31 t
   card generation 353ms, simulate→chart 1.43s (~1.2s deliberate staging).
 - Tests now 40/40 (31 + 9 plan-store); gates A/B/C all green (lint, tests,
   build, 13/13 smoke, public-plan lifecycle e2e, 320-1440px no overflow).
+
+---
+
+## MCR-001 implemented (2026-08-27, owner-approved) — MODEL v3.0.0
+
+Integer-minor-unit money: capital split to the cent (remainder to the earliest
+purchases — sums are exact by construction), fees rounded to the cent and
+clamped per purchase, money outputs cent-quantized; units/prices continuous;
+Monte Carlo intentionally unchanged (statistical mode). behaviorLock recaptured
+under v3 (v2 constants at commit 040e560); v1 oracle now asserts a documented
+money-quantization tolerance. New saved plans stamp v3; old plans keep v2.
+Suite 41/41, lint clean, build green, 13/13 smoke, plans e2e 4/4.

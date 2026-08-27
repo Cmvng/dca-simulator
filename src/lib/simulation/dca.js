@@ -38,14 +38,35 @@ export function validateCapital(capital) {
   return { ok: true };
 }
 
+// ── Integer-minor-unit money (MODEL v3.0.0, approved MCR-001) ────────────────
+// All money quantities are computed in whole cents: capital is split to the
+// cent (leftover cents go to the earliest purchases so the sum is EXACT),
+// fees are rounded to the cent and clamped to the purchase amount. Asset
+// units and prices remain continuous (fractional coins are inherently
+// non-integer). Money outputs are cent-quantized at the engine boundary.
+
+export const toCents = x => Math.round(x * 100);
+export const round2 = v => Math.round(v * 100) / 100;
+
+// Split totalCents across n purchases: floor share each, remainder cents
+// distributed one-per-buy from the front. Σ result === totalCents exactly.
+export function allocateCents(totalCents, n) {
+  const base = Math.floor(totalCents / n);
+  const rem = totalCents - base * n;
+  return Array.from({ length: n }, (_, i) => base + (i < rem ? 1 : 0));
+}
+
 // Plan skeleton — everything derivable without market data (instant preview).
 export function buildSchedule({ capital, freqId, months }) {
   const freq = getFreq(freqId);
   const entries = entryCount(months, freq.days);
+  const capitalCents = toCents(capital);
   return {
     freq,
     entries,
-    amtPer: capital / entries,
+    capitalCents,
+    amountsCents: allocateCents(capitalCents, entries),
+    amtPer: capitalCents / entries / 100, // mean per-buy amount, for display
     windowDays: months * 30,
     // Day offset of each purchase from the start.
     dayOffsets: Array.from({ length: entries }, (_, i) => i * freq.days),
@@ -53,54 +74,60 @@ export function buildSchedule({ capital, freqId, months }) {
 }
 
 // Execute a DCA plan against a series of entry prices.
-// Fees/slippage default to 0 so with defaults this reproduces v1 exactly:
-//   units_i = amtPer / price_i ; avgEntry = capital / totalUnits.
-export function executeDca({ amtPer, entryPrices, feePct = 0, feeFixed = 0, slippagePct = 0 }) {
+// Prefer `amountsCents` (exact allocation); `amtPer` is a convenience
+// fallback where each buy is round(amtPer × 100) cents.
+export function executeDca({ amtPer, amountsCents, entryPrices, feePct = 0, feeFixed = 0, slippagePct = 0 }) {
+  const n = entryPrices.length;
+  const cents = amountsCents ?? Array.from({ length: n }, () => Math.round(amtPer * 100));
+  const feeFixedCents = Math.round(feeFixed * 100);
   const buys = [];
-  let cumUnits = 0, cumInvested = 0, cumFees = 0;
-  for (let i = 0; i < entryPrices.length; i++) {
+  let cumUnits = 0, cumInvestedCents = 0, cumFeeCents = 0;
+  for (let i = 0; i < n; i++) {
     const price = entryPrices[i];
     const execPrice = price * (1 + slippagePct / 100);
-    const fee = amtPer * (feePct / 100) + feeFixed;
-    const net = Math.max(0, amtPer - fee);
-    const units = execPrice > 0 ? net / execPrice : 0;
+    const grossCents = cents[i];
+    const feeCents = Math.min(grossCents, Math.round(grossCents * (feePct / 100)) + feeFixedCents);
+    const netCents = grossCents - feeCents;
+    const units = execPrice > 0 ? (netCents / 100) / execPrice : 0;
     cumUnits += units;
-    cumInvested += amtPer;
-    cumFees += Math.min(fee, amtPer);
+    cumInvestedCents += grossCents;
+    cumFeeCents += feeCents;
     buys.push({
-      i, price, execPrice, gross: amtPer, fee: Math.min(fee, amtPer), net, units,
-      cumUnits, cumInvested, cumFees,
-      avgEntry: cumUnits > 0 ? cumInvested / cumUnits : 0,
+      i, price, execPrice,
+      gross: grossCents / 100, fee: feeCents / 100, net: netCents / 100, units,
+      cumUnits, cumInvested: cumInvestedCents / 100, cumFees: cumFeeCents / 100,
+      avgEntry: cumUnits > 0 ? (cumInvestedCents / 100) / cumUnits : 0,
     });
   }
   const units = cumUnits;
   return {
     buys,
-    entries: entryPrices.length,
-    amtPer,
-    totalInvested: cumInvested,
-    totalFees: cumFees,
-    netInvested: cumInvested - cumFees,
+    entries: n,
+    amtPer: n > 0 ? cumInvestedCents / n / 100 : 0,
+    totalInvested: cumInvestedCents / 100,
+    totalFees: cumFeeCents / 100,
+    netInvested: (cumInvestedCents - cumFeeCents) / 100,
     units,
     // Gross-basis average entry (v1 definition: capital / tokens).
-    avgEntry: units > 0 ? cumInvested / units : 0,
+    avgEntry: units > 0 ? (cumInvestedCents / 100) / units : 0,
   };
 }
 
 export function lumpSumOutcome({ capital, startPrice, feePct = 0, feeFixed = 0, slippagePct = 0 }) {
-  const r = executeDca({ amtPer: capital, entryPrices: [startPrice], feePct, feeFixed, slippagePct });
+  const r = executeDca({ amountsCents: [toCents(capital)], entryPrices: [startPrice], feePct, feeFixed, slippagePct });
   return { ...r, strategy: "lump" };
 }
 
 // initialPct% deployed at startPrice today, the rest DCA'd over entryPrices.
 export function hybridOutcome({ capital, initialPct, startPrice, entryPrices, feePct = 0, feeFixed = 0, slippagePct = 0 }) {
-  const upfront = capital * (initialPct / 100);
-  const rest = capital - upfront;
-  const lump = upfront > 0
-    ? executeDca({ amtPer: upfront, entryPrices: [startPrice], feePct, feeFixed, slippagePct })
+  const totalCents = toCents(capital);
+  const upfrontCents = Math.round(totalCents * (initialPct / 100));
+  const restCents = totalCents - upfrontCents;
+  const lump = upfrontCents > 0
+    ? executeDca({ amountsCents: [upfrontCents], entryPrices: [startPrice], feePct, feeFixed, slippagePct })
     : { units: 0, totalInvested: 0, totalFees: 0, buys: [] };
-  const dca = rest > 0
-    ? executeDca({ amtPer: rest / entryPrices.length, entryPrices, feePct, feeFixed, slippagePct })
+  const dca = restCents > 0
+    ? executeDca({ amountsCents: allocateCents(restCents, entryPrices.length), entryPrices, feePct, feeFixed, slippagePct })
     : { units: 0, totalInvested: 0, totalFees: 0, buys: [] };
   const units = lump.units + dca.units;
   const totalInvested = lump.totalInvested + dca.totalInvested;

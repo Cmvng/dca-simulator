@@ -1,6 +1,6 @@
 # METHODOLOGY CHANGE REQUEST — MCR-001: float → integer-minor-unit money
 
-STATUS: **OPEN — awaiting human decision. Not implemented.**
+STATUS: **APPROVED by the owner (2026-08-27, \"Do it\") — IMPLEMENTED as MODEL v3.0.0.**
 
 ## CURRENT BEHAVIOUR (quoted)
 
@@ -60,4 +60,16 @@ saved plans.
 
 ## DECISION
 
-_Pending owner sign-off. Until then the engine remains unchanged._
+Approved by the owner on 2026-08-27. Implemented per the recommendation:
+- `MODEL_VERSION` bumped to **3.0.0** (new saved plans stamp v3; existing
+  saved plans keep their stored v2 attribution).
+- Money in integer cents: `allocateCents()` splits capital exactly (remainder
+  cents to the earliest purchases); fees rounded to the cent and clamped per
+  purchase; money outputs cent-quantized at the engine boundary. Units and
+  prices remain continuous. Monte Carlo distribution mode intentionally keeps
+  float per-buy amounts (statistical tooling, disclosed methodology).
+- `behaviorLock.test.js` constants recaptured under v3 (v2 constants preserved
+  in git history, commit 040e560); the v1 oracle test now asserts a documented
+  money-quantization tolerance (≤~1e-3 relative) instead of float equality.
+- New invariants: totalInvested === capital exactly; every per-buy amount is a
+  whole number of cents; allocation exactness locked by a dedicated test.

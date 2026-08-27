@@ -25,10 +25,10 @@ export default function Methodology({ mode = "scenario" }) {
       <P>In the default scenario mode, the historical window's prices are scaled so their average sits on today's live price. That keeps the real shape of the market's movement (dips, rallies, volatility) while anchoring the whole range to where the coin trades now. Entry prices are then sampled evenly across that scaled window. This produces a plausible path, not a forecast.</P>
 
       <H>4. DCA schedule</H>
-      <P>A month counts as 30 days. Number of purchases = plan days ÷ frequency days, rounded, and kept between 4 and 180. Your capital is split evenly; the first purchase is on day 0 and purchase <em>n</em> happens <em>n</em> × frequency-days later. Daily closing prices stand in for execution prices (see fees & slippage).</P>
+      <P>A month counts as 30 days. Number of purchases = plan days ÷ frequency days, rounded, and kept between 4 and 180. Your capital is split to the whole cent — any leftover cents go to the earliest purchases, so the amounts always add up exactly. The first purchase is on day 0 and purchase <em>n</em> happens <em>n</em> × frequency-days later. Daily closing prices stand in for execution prices (see fees & slippage).</P>
 
       <H>5. Fees & slippage</H>
-      <P>Optional. A percentage and/or fixed fee is deducted from every purchase before buying, so units bought reflect the fee. The optional slippage assumption raises every execution price by the chosen amount, because historical closes are not guaranteed executable prices. Both default to zero.</P>
+      <P>Optional. A percentage and/or fixed fee is deducted from every purchase before buying (rounded to the cent, never more than the purchase itself), so units bought reflect the fee. The optional slippage assumption raises every execution price by the chosen amount, because historical closes are not guaranteed executable prices. Both default to zero.</P>
 
       <H>6. Scenario construction</H>
       <P>Flat, −20% and −50% are fixed assumptions applied to the live price. "Historical worst-like" and "strong upside" scenarios use the worst and best moves actually observed across all completed windows of your plan's length in the past year — their sources are labeled on each card. Your target is your own chosen test case.</P>

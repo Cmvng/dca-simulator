@@ -1,8 +1,11 @@
 // Equivalence + invariant tests for the extracted engine.
 //
 // THE ORACLE: `v1RunSim` below is a verbatim copy of the simulation from the
-// original src/App.jsx (v1). With default advanced options, the refactored
-// engine must reproduce v1's numbers exactly (within float tolerance).
+// original src/App.jsx (v1). Since MODEL v3.0.0 (approved MCR-001) money is
+// integer-cent quantized, so the engine matches v1's float math to within
+// money quantization (≤1 cent per purchase → ≤~1e-3 relative on money and
+// unit figures); non-money fields still match exactly. The exact v3 outputs
+// are pinned by behaviorLock.test.js.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -68,8 +71,12 @@ function makePrices(seed, days = 365, start = 100) {
 }
 
 const close = (a, b, msg) => assert.ok(Math.abs(a - b) <= Math.max(1e-9, Math.abs(b) * 1e-9), `${msg}: ${a} vs ${b}`);
+// money-quantization tolerance vs the v1 float oracle (MCR-001)
+const closeQ = (a, b, msg) => assert.ok(Math.abs(a - b) <= Math.max(0.02, Math.abs(b) * 1e-3), `${msg}: ${a} vs ${b}`);
+// within half a cent (money outputs are cent-rounded)
+const closeCents = (a, b, msg) => assert.ok(Math.abs(a - b) <= 0.005 + 1e-9, `${msg}: ${a} vs ${b}`);
 
-test("v2 engine reproduces v1 numbers exactly with default options", () => {
+test("engine matches the v1 oracle within money quantization (MCR-001)", () => {
   const cases = [
     { capital: 500, freqId: "daily", months: 3, targetPct: 50, seed: 1 },
     { capital: 10000, freqId: "weekly", months: 3, targetPct: 50, seed: 2 },
@@ -85,7 +92,7 @@ test("v2 engine reproduces v1 numbers exactly with default options", () => {
     for (const k of ["entries", "amtPer", "avgEntry", "totalTokens", "refPrice", "targetPrice",
       "targetVal", "targetProfit", "targetROI", "currentVal", "currentROI", "flatVal",
       "downVal", "downLoss", "down50Val", "down50Loss", "simLow", "simHigh", "volPct", "windowDays"]) {
-      close(v2[k], v1[k], `${JSON.stringify(c)} field ${k}`);
+      closeQ(v2[k], v1[k], `${JSON.stringify(c)} field ${k}`);
     }
   }
 });
@@ -98,9 +105,9 @@ test("invariants: capital conservation, monotone units, consistency, finiteness"
         capital: 7500, freqId, months: 4, targetPct: 25, prices,
         livePrice: prices[prices.length - 1][1], feePct: 0.5, feeFixed: 1,
       });
-      // Total scheduled contributions equal capital.
-      close(r.totalInvested, 7500, "total invested == capital");
-      close(r.buys[r.buys.length - 1].cumInvested, 7500, "cum invested == capital");
+      // Total scheduled contributions equal capital EXACTLY (integer cents).
+      assert.equal(r.totalInvested, 7500, "total invested === capital exactly");
+      assert.equal(r.buys[r.buys.length - 1].cumInvested, 7500, "cum invested === capital exactly");
       // Cumulative units never decrease; fees never negative.
       let prev = 0;
       for (const b of r.buys) {
@@ -110,8 +117,8 @@ test("invariants: capital conservation, monotone units, consistency, finiteness"
       }
       // avgEntry mathematically consistent.
       close(r.avgEntry, r.totalInvested / r.units, "avgEntry = invested/units");
-      // Ending value = units × price.
-      close(r.targetVal, r.units * r.targetPrice, "value = units × price");
+      // Ending value = units × price, cent-quantized.
+      closeCents(r.targetVal, r.units * r.targetPrice, "value = units × price (± half cent)");
       // Never NaN/Infinity anywhere important.
       for (const k of ["targetVal", "targetROI", "currentVal", "avgEntry", "units", "totalFees"]) {
         assert.ok(Number.isFinite(r[k]), `${k} finite`);
@@ -134,8 +141,8 @@ test("comparison uses identical capital and endpoint for all strategies", () => 
   // Lump sum invests everything at live price.
   close(lump.units, 10000 / live, "lump units");
   close(lump.valueAtTarget, (10000 / live) * r.targetPrice, "lump value at target = units × target price");
-  // Same evaluation endpoint: all valueAtTarget = units × same targetPrice.
-  for (const c of r.comparison) close(c.valueAtTarget, c.units * r.targetPrice, `${c.id} endpoint`);
+  // Same evaluation endpoint: all valueAtTarget = units × same targetPrice (cent-quantized).
+  for (const c of r.comparison) closeCents(c.valueAtTarget, c.units * r.targetPrice, `${c.id} endpoint`);
   // Hybrid units sit between... not guaranteed in general, but invested equals capital:
   assert.ok(Number.isFinite(hybrid.units) && hybrid.units > 0);
 });
@@ -168,8 +175,8 @@ test("backtest uses actual historical prices and dates (no scaling)", () => {
   assert.equal(bt.startDate, prices[startIdx][0]);
   // End evaluated at the real final price of the window.
   assert.equal(bt.endPrice, prices[startIdx + 90 - 1][1]);
-  close(bt.endValue, bt.units * bt.endPrice, "end value = units × end price");
-  close(bt.totalInvested, 9000, "backtest invests full capital");
+  closeCents(bt.endValue, bt.units * bt.endPrice, "end value = units × end price (± half cent)");
+  assert.equal(bt.totalInvested, 9000, "backtest invests full capital exactly");
   // Lump comparison enters at the window's real start price.
   close(bt.lump.units, 9000 / prices[startIdx][1], "lump entry at window start");
 });

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   entryCount, buildSchedule, executeDca, validateCapital,
-  requiredPriceForRoi, breakEvenPrice, FREQS,
+  requiredPriceForRoi, breakEvenPrice, FREQS, allocateCents, toCents,
 } from "./dca.js";
 
 const close = (a, b, msg) => assert.ok(Math.abs(a - b) <= Math.max(1e-9, Math.abs(b) * 1e-9), `${msg}: ${a} vs ${b}`);
@@ -71,4 +71,18 @@ test("required price / break-even math", () => {
 
 test("all frequencies allow up to 6 months", () => {
   for (const f of FREQS) assert.equal(f.maxMonths, 6);
+});
+
+test("integer-cent allocation (MODEL v3, MCR-001): exact sums, remainder to the front", () => {
+  // $1,234.56 across 90 buys: floor 1371¢ each + 66 remainder cents up front
+  const cents = allocateCents(toCents(1234.56), 90);
+  assert.equal(cents.reduce((a, b) => a + b, 0), 123456, "allocation sums exactly");
+  assert.equal(cents[0], 1372);
+  assert.equal(cents[65], 1372);
+  assert.equal(cents[66], 1371);
+  assert.equal(Math.max(...cents) - Math.min(...cents), 1, "amounts differ by at most one cent");
+  // executed plan conserves capital exactly, per-buy amounts are whole cents
+  const r = executeDca({ amountsCents: cents, entryPrices: Array.from({ length: 90 }, () => 100) });
+  assert.equal(Math.round(r.totalInvested * 100), 123456, "total invested exact to the cent");
+  for (const b of r.buys) assert.ok(Math.abs(b.gross * 100 - Math.round(b.gross * 100)) < 1e-9, "gross is whole cents");
 });

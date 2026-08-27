@@ -54,7 +54,7 @@ export function sampleEntryPrices(windowVals, entries) {
 // ── 2. Historical backtest — actual prices, actual dates ─────────────────────
 // prices: CoinGecko [[timestampMs, price], ...] daily points.
 // startOffsetDays: how many days ago the plan would have started.
-export function backtest({ prices, startOffsetDays, months, entries, amtPer, feePct = 0, feeFixed = 0, slippagePct = 0 }) {
+export function backtest({ prices, startOffsetDays, months, entries, amtPer, amountsCents, feePct = 0, feeFixed = 0, slippagePct = 0 }) {
   const windowDays = months * 30;
   const startIdx = prices.length - startOffsetDays;
   const endIdx = startIdx + windowDays;
@@ -70,9 +70,9 @@ export function backtest({ prices, startOffsetDays, months, entries, amtPer, fee
   const buyDates = Array.from({ length: entries }, (_, i) =>
     slice[Math.min(i * step, slice.length - 1)][0]);
 
-  const exec = executeDca({ amtPer, entryPrices, feePct, feeFixed, slippagePct });
+  const exec = executeDca({ amtPer, amountsCents, entryPrices, feePct, feeFixed, slippagePct });
   const endPrice = vals[vals.length - 1];
-  const endValue = exec.units * endPrice;
+  const endValue = Math.round(exec.units * endPrice * 100) / 100;
   return {
     ok: true,
     mode: "backtest",
@@ -92,12 +92,12 @@ export function backtest({ prices, startOffsetDays, months, entries, amtPer, fee
 // Runs the plan over every windowDays-long slice of real prices (stepping
 // stepDays), evaluated at each window's own final price. Historical outcomes,
 // NOT probabilities.
-export function rollingWindows({ vals, windowDays, entries, amtPer, stepDays = 7, feePct = 0, feeFixed = 0, slippagePct = 0 }) {
+export function rollingWindows({ vals, windowDays, entries, amtPer, amountsCents, stepDays = 7, feePct = 0, feeFixed = 0, slippagePct = 0 }) {
   const results = [];
   for (let start = 0; start + windowDays <= vals.length; start += stepDays) {
     const windowVals = vals.slice(start, start + windowDays);
     const entryPrices = sampleEntryPrices(windowVals, entries);
-    const exec = executeDca({ amtPer, entryPrices, feePct, feeFixed, slippagePct });
+    const exec = executeDca({ amtPer, amountsCents, entryPrices, feePct, feeFixed, slippagePct });
     const endPrice = windowVals[windowVals.length - 1];
     const endValue = exec.units * endPrice;
     results.push({

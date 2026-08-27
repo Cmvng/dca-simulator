@@ -33,7 +33,7 @@ export function realityCheck({ vals, windowDays, targetPct }) {
 export function buildScenarios({ units, totalInvested, refPrice, targetPct, reality }) {
   const mk = (id, name, movePct, basis) => {
     const price = refPrice * (1 + movePct / 100);
-    const value = units * price;
+    const value = Math.round(units * price * 100) / 100; // cents (MODEL v3)
     return {
       id, name, movePct, basis, price, value,
       profit: value - totalInvested,
