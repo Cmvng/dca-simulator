@@ -47,9 +47,35 @@
 - Currency/price/token formatting via `fmtUSD` / `fmtPrice` / `fmtPct` / `fmtTok` — reuse these,
   don't reformat ad hoc.
 
+## v2 decisions (2026-08-27 upgrade)
+
+| Decision | Reason |
+|---|---|
+| v1 simulation math preserved bit-for-bit as the default scenario mode | Spec forbade arbitrary methodology changes; enforced by an oracle test comparing against a verbatim copy of v1 `runSim`/`analyzeMarket` |
+| All calculation in pure modules under `src/lib/simulation/`, UI never computes | Testability; `npm test` runs on node:test with zero new prod dependencies |
+| `MODEL_VERSION` (`src/lib/version.js`) stamped on results & saved plans | A saved result must stay attributable to the methodology that produced it |
+| History extended 120d → 365d (proxy) | Enables backtests, rolling windows, reality check; market analysis still uses the last 120d slice to keep v1 verdict semantics |
+| Three history uses kept strictly separate & labeled: scenario (scaled), backtest (real), rolling/statistical | Phase 55 rule — never mix historical actuals with synthetic paths unlabeled |
+| Reality Check thresholds: typical = median abs plan-length move; Modest ≤ typical < Moderate ≤ 2×typical < Ambitious ≤ max observed gain < Extreme | Deterministic and documented; never phrased as probability |
+| Monte Carlo = seeded bootstrap of historical daily log returns (mulberry32) | Reproducible (seed derived from plan config); "% of paths above target" labeled model-based estimate with limitations |
+| Floats kept in the engine (not integer cents) | v1 parity requirement outweighed the integer-units guideline; guarded by invariant tests (no NaN/Inf, conservation) |
+| Legacy `flatVal` = capital kept for v1 compatibility; visible Flat scenario computes units × unchanged price | v1's "flat = breakeven" was an approximation; both preserved and precise versions exist |
+| Share plan links are hash-encoded config (`#p=…`), validated on decode | No server storage exists; zero personal data in links |
+| Analytics = no-op-safe layer forwarding to plausible/gtag if the owner adds one | No analytics backend exists; never blocks or breaks the app; capital only ever bucketed |
+| Local dev API via vite middleware invoking the edge handler | `vercel dev` no longer needed; same code path as production |
+| Playwright smoke test with mocked API (playwright-core devDep, preinstalled Chromium) | Visual/runtime QA without hitting CoinGecko |
+
 ## Session log
 
 - **2026-08-27** — Claude session: full codebase read; created `docs/PROJECT_OVERVIEW.md`,
   `docs/CHECKPOINT.md`, `docs/MEMORY.md` on branch `claude/project-docs-checkpoint-ywkwop`.
   Identified (not fixed) the open issues listed in CHECKPOINT.md — notably the duplicated/drifted
   `STABLE` blacklist and the scenario label basis inconsistency.
+- **2026-08-27 (later)** — Claude session: v2 product upgrade on the same branch. Refactored the
+  single-file app into components/hooks/lib/services; extracted a pure, tested engine (30 tests,
+  v1-equivalence oracle); added results-page redesign, chart, purchase timeline, DCA vs hybrid vs
+  lump sum, fees/slippage, break-even, drawdown, Reality Check, rolling windows, market conditions,
+  Monte Carlo, historical backtest mode, wait-for-dip, saved plans + tracking, 3 share-card formats,
+  shareable plan URLs, analytics layer, 365-day API history, staleness labels, local dev API,
+  a11y/mobile pass, Playwright smoke QA. Not deployed; no PR opened. v1 known issues from the first
+  session (blacklist dead code, stale comments, scenario label basis) resolved by the refactor.

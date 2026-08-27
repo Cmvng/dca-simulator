@@ -1,189 +1,143 @@
-# CMVNG DCA Simulator — Project Overview
+# CMVNG DCA Simulator — Project Overview (v2)
 
-> **What this is:** A single-page web app that lets anyone simulate a Dollar-Cost-Averaging (DCA)
-> strategy into any of the top 250 cryptocurrencies, see realistic outcome numbers (profit target,
-> flat, -20%, -50% scenarios), and generate a branded, shareable image card for X / Instagram / Telegram.
+> **What this is:** a crypto DCA **decision engine** — build a plan, stress-test it against
+> realistic market conditions (scenarios, backtests, distributions), compare it with lump-sum
+> deployment, and share or track it. Brand: **CMVNG** (`cmvng.app`). Data: CoinGecko via a
+> caching Vercel Edge proxy. The app never presents a simulation as a forecast.
 >
-> **Live data source:** CoinGecko (via a caching Vercel Edge proxy)
-> **Brand:** CMVNG (`cmvng.app`)
+> *v1 of this document (single-file app) is preserved in git history at commit `18f7647`.*
 
 ---
 
-## 1. Tech Stack
+## 1. Tech stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | React 18 (single component file), inline styles — no CSS framework |
-| Build tool | Vite 4 with `@vitejs/plugin-react` |
-| Backend | One Vercel **Edge Function** (`api/coins.js`) acting as a caching proxy to CoinGecko |
-| Data API | CoinGecko v3 (free tier, optional demo API key via `COINGECKO_API_KEY` env var) |
-| Hosting | Vercel (frontend static build + edge function under `/api`) |
-| Share card | HTML5 `<canvas>` rendered client-side, exported as PNG data URL |
+| Frontend | React 18 + Vite 4, inline styles (no CSS framework), custom SVG chart |
+| Engine | Pure ES modules in `src/lib/simulation/` — no UI imports, fully unit-tested |
+| Tests | `node --test` (Node 20+), zero extra runtime deps; Playwright smoke via `playwright-core` |
+| Backend | One Vercel **Edge Function** (`api/coins.js`) proxying CoinGecko with edge caching |
+| Hosting | Vercel (not deployed from the v2 branch yet) |
 
-There are **no other dependencies** — no router, no state library, no CSS files. The entire UI
-lives in `src/App.jsx` (~1,030 lines).
-
-## 2. Repository Layout
+## 2. Repository layout
 
 ```
-dca-simulator/
-├── index.html          # Vite entry — title "DCA Outcome Simulator"
-├── package.json        # react, react-dom, vite, @vitejs/plugin-react
-├── vite.config.js      # minimal — just the React plugin
-├── api/
-│   └── coins.js        # Vercel Edge proxy (list / history / price / image endpoints)
-└── src/
-    ├── main.jsx        # ReactDOM root, StrictMode
-    └── App.jsx         # EVERYTHING: constants, cache, API calls, math, canvas card, UI
+api/coins.js                      Edge proxy: list / history(365d) / price / image
+vite.config.js                    + dev middleware that serves /api/coins locally
+src/
+  main.jsx                        React root
+  App.jsx                         orchestration only (state, mode, wiring)
+  styles/theme.js                 palette + shared styles + global CSS
+  services/api.js                 fetch, localStorage cache, staleness, stale fallback
+  hooks/                          useCoins, useMarketData, useSimulation, useSavedPlans
+  components/
+    Header, CoinSelector, CapitalInput, FrequencySelector, DurationSelector,
+    TargetSelector, AdvancedOptions, SchedulePreview, SharePanel, SavedPlansPanel,
+    ErrorState, LoadingState, ui.jsx (primitives)
+    results/
+      ResultsView (assembly), MarketSnapshot, ScenarioGrid, RealityCheck,
+      MarketConditions, StrategyComparison, RollingWindows, RiskCards,
+      PortfolioChart, DcaTimeline, MonteCarloCard, WaitForDip, BacktestView,
+      Methodology
+  lib/
+    version.js                    MODEL_VERSION (currently 2.0.0)
+    simulation/
+      dca.js                      schedule, execution (fees/slippage), lump/hybrid, break-even
+      historical.js               scaled-window (v1), backtest slices, rolling windows, moves
+      scenarios.js                scenario set, reality check, wait-for-dip
+      scoring.js                  analyzeMarket (v1 port), explainable market conditions
+      statistics.js               avg/std/percentile/drawdown/log-returns
+      monteCarlo.js               seeded bootstrap distribution mode
+      validate.js                 data-quality gate
+      engine.js                   runScenarioSimulation / runBacktest (orchestrators)
+      *.test.js                   30 tests incl. v1-equivalence oracle + invariants
+    formatting/  money, percentage, dates
+    sharing/shareCard.js          canvas cards: X 1200×675, square 1080×1080, story 1080×1920
+    planUrl.js                    hash-encoded shareable plan links (validated on decode)
+    savedPlans.js                 local plans + live tracking (model-versioned)
+    analytics.js                  no-op-safe event layer
+docs/                             PROJECT_OVERVIEW (this file), CHECKPOINT, MEMORY
 ```
 
-## 3. How the App Works (User Flow)
+## 3. The three simulation modes (kept strictly separate)
 
-1. **Load** — the app fetches the top 250 coins (stablecoins and wrapped/staked assets filtered
-   out) from `/api/coins?type=list`, with an animated progress bar.
-2. **Step 1 — Choose Your Coin** — searchable dropdown (name or symbol, top 40 matches shown).
-   Selecting a coin:
-   - Starts a **live price poll every 30 seconds** (`?type=price&id=...`, 60s client cache).
-   - Fetches **120 days of daily price history** (`?type=history&id=...`, 12h cache).
-   - Runs `analyzeMarket()` and shows a verdict banner (Strong / Decent / Mixed / Weak setup)
-     plus a trend pill (Uptrend / Downtrend / Ranging).
-3. **Step 2 — Build Your Plan** — the user sets:
-   - **Capital** (USD, formatted text input, default $500)
-   - **Frequency**: every 12h / daily / weekly / bi-weekly (all allow up to 6 months)
-   - **Duration**: 1–6 months (slider)
-   - **Target gain**: +10 / +25 / +50 / +100 / +200 %
-4. **Simulate** — "Show Me the Numbers →" runs `runSim()` (with a staged loading animation,
-   ~1.6 s minimum for feel) and renders:
-   - **Target result card**: portfolio value, profit, and ROI if the target % is hit — with an
-     "aggressive target" warning when the target exceeds 2× the window volatility.
-   - **Share panel** (dark green, high-visibility) — see §5.
-   - **DCA breakdown**: per-buy amount, number of buys, entry price range, volatility-adjusted
-     average entry, tokens accumulated, current value.
-   - **Downside scenarios**: flat, -20%, -50% outcomes in plain language.
-   - **Market snapshot**: live price, 30/90-day MAs, volatility %, 120-day momentum, trend.
-5. A **sticky bottom bar** appears after simulation with "Share Your Card" (smooth-scrolls to the
-   share panel) and "Recalculate" buttons.
+1. **Scenario simulation** (default; v1 methodology preserved exactly): the historical window
+   matching the plan's duration is scaled so its average sits on the live price; entries are
+   sampled evenly across it; every outcome (target/flat/−20%/−50%/derived) is valued from the
+   live price. Anchored to now, real volatility shape — a plausible path, never a forecast.
+2. **Historical backtest**: actual prices and dates from a chosen completed period, no scaling.
+   Includes a same-period DCA-vs-lump comparison.
+3. **Statistical (distribution) mode** (Advanced): 10,000 paths bootstrapped from the window's
+   daily log returns with a deterministic seed; reports percentiles and the share of paths above
+   target, labeled "model-based estimate" with methodology and limitations.
 
-## 4. Simulation Logic (`runSim` in `src/App.jsx`)
+Supporting analyses derived from real (unscaled) history: **Reality Check** (target vs median
+absolute plan-length move / largest observed move, deterministic labels), **rolling windows**
+(plan re-run over every completed plan-length window → best/median/worst), derived best/worst
+scenario cards, drawdown along the path, break-even ladder, and "what if I wait for a dip".
 
-The simulation is deliberately "honest but anchored to now":
+## 4. Engine guarantees
 
-- **Entries** = `round((months × 30) / frequency.days)`, clamped to 4–180. Capital is split evenly.
-- **Volatility window matches the chosen duration** — planning a 3-month DCA uses exactly the last
-  90 days of history, 1 month uses 30 days, etc.
-- **Price scaling**: historical window prices are scaled by `livePrice / windowAverage`, so the
-  simulation preserves the *shape* of real price movement (dips, peaks, volatility) but centres the
-  whole range on today's live price rather than stale absolute prices.
-- Entry prices are sampled evenly across the scaled window; tokens accumulated = Σ (amount / price).
-- **All outcome values (target / flat / -20% / -50%) are computed from the live price**, not the
-  average entry — the target is "coin goes +X% from now".
+- **v1 equivalence**: `engine.test.js` embeds a verbatim copy of the original `runSim` and
+  `analyzeMarket`; with default options the new engine must match them exactly.
+- **Invariants tested**: contributions sum to capital; cumulative units never decrease;
+  avgEntry = invested/units; value = units × price; fees ≥ 0 and reduce units; hybrid(0%) ≡ DCA,
+  hybrid(100%) ≡ lump sum; no NaN/Infinity; Monte Carlo deterministic per seed with ordered
+  percentiles; validation rejects garbage and flags cleaned data.
+- **Model versioning**: results and saved plans carry `MODEL_VERSION`; bump it whenever a
+  calculation changes.
 
-### Market analysis (`analyzeMarket`)
-
-Scored on three factors over the 120-day history:
-- **Trend**: current vs 30-day MA and 30 vs 90-day MA (Uptrend / Downtrend / Ranging) → ±2
-- **Momentum**: 120-day % change (>20% → +2, >0 → +1, >-20% → -1, else -2)
-- **Position in range**: near the low (+1) vs near the high (-1)
-
-Score ≥3 → "Strong Setup" 🔥 · ≥1 → "Decent Setup" ✅ · ≥-1 → "Mixed Signals" ⚠️ · else "Weak Setup" ❌
-
-## 5. Share Card (`makeCard`)
-
-A 1200×675 canvas PNG (X/Twitter feed aspect ratio):
-
-- **Left green panel (36%)**: CMVNG branding, optional user profile photo (uploaded client-side,
-  drawn in a clipped circle with white + green accent rings) and user name, coin logo + symbol +
-  live price, 24h change pill, trend badge and setup verdict.
-- **Right white panel**: "MY DCA PLAN" summary line, big target value in 84px, profit + ROI pill
-  (green when positive, red when negative — *always by profit sign, never by market verdict*),
-  three scenario boxes (flat / -20% / -50%), value-at-live-price + average entry bar, and
-  "Not financial advice · DYOR" + `cmvng.app` footer.
-- Coin logos come from CoinGecko's CDN and are routed through the proxy's `?type=image` endpoint
-  to avoid CORS-tainting the canvas.
-- Download button saves `cmvng-{symbol}-dca-x.png`.
-
-## 6. The Vercel Proxy (`api/coins.js`)
-
-A single Edge Function with four endpoints, all cached at Vercel's edge via `Cache-Control:
-s-maxage` — so CoinGecko is hit roughly once per cache window regardless of user count:
+## 5. API proxy (`api/coins.js`)
 
 | Endpoint | Purpose | Edge cache |
 |---|---|---|
-| `?type=list` | Top 250 coins (3 parallel CoinGecko pages, stables/wrapped filtered) | 12 h |
-| `?type=history&id=X` | 120-day daily price history | 12 h |
-| `?type=price&id=X` | Live price + 24h change | 60 s |
-| `?type=image&url=X` | CORS-safe image proxy (CoinGecko CDN URLs only) | 7 days |
+| `?type=list` | Top 250 (3 pages, stables/wrapped filtered) → `{fetchedAt, coins}` | 12 h |
+| `?type=history&id=X` | 365-day daily history → `{prices…, fetchedAt}` | 12 h |
+| `?type=price&id=X` | Live price + 24h → `{fetchedAt, data}` | 60 s |
+| `?type=image&url=X` | CORS-safe image proxy (CoinGecko CDN allow-list) | 7 d |
 
-Safety measures: coin `id` validated against `/^[a-z0-9-]+$/`; image proxy allow-lists only
-`assets.coingecko.com` and `coin-images.coingecko.com`; optional `COINGECKO_API_KEY` env var is
-appended as the demo API key. CORS is open (`*`) with an OPTIONS preflight handler.
+Ids validated (`^[a-z0-9-]{1,64}$`); 429s pass through with Retry-After and a human message;
+every invocation (≈ edge-cache miss) logs `{type, status, ms}` as JSON. The client
+(`services/api.js`) layers a localStorage cache with stale-fallback and surfaces
+`fetchedAt`/`stale` so the UI always shows "Updated X ago" and labels stale data.
 
-## 7. Client-Side Caching (in `App.jsx`)
+## 6. Sharing & retention
 
-A small `localStorage` wrapper (keys prefixed `cmv_`):
-- Coin list & history: 12 h TTL
-- Live price: 60 s TTL (per coin, key `lp_<id>`)
-- **Stale fallback**: if the network fails, expired cached data is served rather than erroring.
+- **Cards**: three canvas formats with CMVNG branding, plan, headline, scenarios, model label and
+  the non-advice footer. Profit color is always by sign, never by market verdict.
+- **Links**: `#p=<base64url config>` rebuilds the plan client-side; contains no personal data;
+  decode is strictly validated. Server-stored `/plan/<id>` pages are future work (needs a DB).
+- **Saved plans** (localStorage, ≤30) store config, headline, seed and model version.
+  **Tracking** compares plan vs reality using real daily prices since activation (labeled
+  approximation).
 
-## 8. Stablecoin / Wrapped-Asset Blacklist
+## 7. Honesty rules baked into the UI
 
-Both the frontend and the proxy carry a large `STABLE` set excluding USD/EUR/GBP stablecoins,
-wrapped tokens (WBTC, WETH, wrapped AVAX/BNB/etc.) and liquid-staking derivatives (stETH, rETH,
-cbETH…), so the picker only offers "real" coins. **Note:** the two lists are duplicated and have
-drifted slightly (see Known Issues) — the proxy's filter is the one that actually matters since
-the frontend receives an already-filtered list.
+Targets are "scenarios you choose", never forecasts; historical outputs are "observations, not
+probabilities"; the probability-like Monte Carlo number is labeled model-based with disclosed
+assumptions; the score is the "CMVNG Model Score (heuristic)" with a how-it-works panel; all
+live data is timestamped and stale data labeled; the methodology panel ("How CMVNG calculates
+this") covers data source, windows, normalization, schedule, fees, scenarios, score and
+limitations.
 
-## 9. Design System
-
-Green-on-white "money" theme defined in the `G` constant: `#16A34A` primary green, pale green
-surfaces (`#F7FDF9` / `#F0FBF4`), dark forest text (`#052E16`), plus red/amber/blue accents for
-scenarios and verdicts. Font: Inter/Segoe UI. Cards use 18px radii and soft green shadows.
-Layout is a single centred 680px column — mobile-friendly by design.
-
-## 10. Development History (17 commits)
-
-Built incrementally by cmvng: initial Vite/React scaffold → `App.jsx` created and iterated ~8
-times (UI polish, simulation logic, share card evolution) → `api/coins.js` proxy added
-(moving from direct CoinGecko calls to the cached proxy) → final App/proxy sync. All work is
-on `main`; commits are file-level ("Update App.jsx" style).
-
-## 11. Running It
+## 8. Running & validating
 
 ```bash
 npm install
-npm run dev        # Vite dev server — NOTE: /api/coins will 404 locally (see below)
-npm run build      # production build to dist/
+npm run dev     # /api/coins served locally by vite middleware (same edge handler as prod)
+npm test        # 30 engine tests
+npm run build   # main bundle ~73KB gzip; share/backtest/MC/saved-plans lazy-loaded
 ```
 
-**Important:** the `/api/coins` proxy is a Vercel Edge Function — it only runs under Vercel.
-For a full local experience use `vercel dev`. Plain `vite` dev serves the UI but API calls fail
-(the app then falls back to any stale localStorage cache).
+Visual/runtime QA: Playwright smoke script (mocked API) drives coin selection → simulation →
+share card → save plan → backtest → mobile viewports; see CHECKPOINT for the latest run.
 
-Deployment: push to the Vercel-connected repo; no configuration needed beyond the optional
-`COINGECKO_API_KEY` environment variable.
+## 9. Status & open items
 
-## 12. Known Issues & Improvement Ideas
-
-**Bugs / rough edges spotted during review (not yet fixed):**
-1. **Duplicated blacklist** — `STABLE` exists in both `App.jsx` and `api/coins.js` and the copies
-   have drifted (e.g. `mkr` vs `mkr-governance-token`). The frontend copy is currently dead code.
-2. `getCoins()`'s comment says "3 parallel calls" but the frontend now makes one proxy call —
-   comment is stale (the 3 calls live in the proxy).
-3. `jsonResponse()` computes `origin` but never uses it (always sends `*`).
-4. Simulation loading message says "Analysing 120 days of data…" even when the window used is
-   shorter (matches chosen months).
-5. In the downside scenario labels, drop prices are shown from `avgEntry` (`avgEntry*0.8`) while
-   the values are computed from live price (`refPrice*0.8`) — slight display inconsistency.
-6. `README.md` is a single line — this document now fills that gap.
-7. No tests, no linting, no CI.
-
-**Possible next steps:**
-- Import the blacklist from a single shared module.
-- `vercel.json` + `vercel dev` docs for local API development.
-- Historical backtest mode ("what if you had DCA'd the last N months") alongside the forward sim.
-- OG meta tags / social preview for cmvng.app, PWA manifest, analytics.
-- Deduplicate scenario math into one helper; unit tests for `runSim` and `analyzeMarket`.
+See `docs/CHECKPOINT.md` (current status, known limitations, next steps) and `docs/MEMORY.md`
+(decisions and their reasons). Headlines: not deployed from this branch; no CI yet; no SSR SEO
+pages; share links are client-encoded only.
 
 ---
 
-*Document generated 2026-08-27 from a full read of the codebase at commit `1a6ae37`.*
+*Updated 2026-08-27 during the v2 upgrade on branch `claude/project-docs-checkpoint-ywkwop`.*

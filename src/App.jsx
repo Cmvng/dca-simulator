@@ -1,1028 +1,339 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+// CMVNG DCA Simulator — app shell and orchestration.
+// UI lives in src/components, market data in src/hooks + src/services, and
+// all calculation in src/lib/simulation (pure, unit-tested).
 
-// ─── STABLECOINS + WRAPPED ASSETS BLACKLIST (comprehensive) ─────────────────────
-const STABLE = new Set([
-  // USD-pegged stablecoins
-  "tether","usd-coin","binance-usd","dai","true-usd","frax","usdp","neutrino",
-  "gemini-dollar","liquity-usd","fei-usd","usdd","celo-dollar","terraclassicusd",
-  "paxos-standard","nusd","flex-usd","usdk","husd","usdx","vai","susd","musd",
-  "dola-usd","origin-dollar","usdn","sperax-usd","paypal-usd","first-digital-usd",
-  "usde","ethena-usde","usdy","mountain-protocol-usdm","ondo-us-dollar-yield",
-  "usdb","reserve-rights-token","volt-protocol","float-protocol","fei-protocol",
-  "frax-share","terra-luna-2","terrausd","tribe","gyroscope-gyd","crvusd",
-  "gho","aave-v3-usdc","raft","deusd","lvusd","letus","zunusd","eura",
-  "money-market-hedge","mkr","vesta-finance","e-money","djed",
-  // EUR/GBP pegged
-  "stasis-eurs","ageur","eurc","euro-coin","tether-eurt","steur","eurs",
-  // Wrapped & liquid staking (not real coins — just wrappers)
-  "wrapped-bitcoin","wrapped-ethereum","staked-ether","rocket-pool-eth",
-  "lido-staked-ether","coinbase-wrapped-staked-eth","mantle-staked-ether",
-  "stakewise-v3-oseth","frax-ether","stakehound-staked-ether","wrapped-steth",
-  "weth","wbtc","weeth","reth","cbeth","sfrxeth","ankr-staked-eth",
-  "sweth","meth","rseth","ezeth","pufeth","apxeth","woeth",
-  "wrapped-avax","wrapped-bnb","wrapped-fantom","wrapped-matic","wrapped-near",
-  "bridged-usdc-polygon-pos-bridge","bridged-usdt",
-]);
+import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { G, card, secLabel, stepNum, GLOBAL_CSS } from "./styles/theme.js";
+import { Spinner } from "./components/ui.jsx";
+import Header from "./components/Header.jsx";
+import CoinSelector from "./components/CoinSelector.jsx";
+import CapitalInput from "./components/CapitalInput.jsx";
+import FrequencySelector from "./components/FrequencySelector.jsx";
+import DurationSelector from "./components/DurationSelector.jsx";
+import TargetSelector from "./components/TargetSelector.jsx";
+import AdvancedOptions from "./components/AdvancedOptions.jsx";
+import SchedulePreview from "./components/SchedulePreview.jsx";
+import ErrorState from "./components/ErrorState.jsx";
+import { ProgressLoading } from "./components/LoadingState.jsx";
+import ResultsView from "./components/results/ResultsView.jsx";
+import { useCoins } from "./hooks/useCoins.js";
+import { useMarketData } from "./hooks/useMarketData.js";
+import { useSimulation } from "./hooks/useSimulation.js";
+import { useSavedPlans } from "./hooks/useSavedPlans.js";
+import { getFreq, validateCapital } from "./lib/simulation/dca.js";
+import { decodePlanFromHash } from "./lib/planUrl.js";
+import { track } from "./lib/analytics.js";
 
-// All frequencies now support up to 6 months max
-const FREQS = [
-  { id:"12h",      label:"Every 12h", days:0.5, maxMonths:6 },
-  { id:"daily",    label:"Daily",     days:1,   maxMonths:6 },
-  { id:"weekly",   label:"Weekly",    days:7,   maxMonths:6 },
-  { id:"biweekly", label:"Bi-weekly", days:14,  maxMonths:6 },
-];
+const SharePanel = React.lazy(() => import("./components/SharePanel.jsx"));
+const SavedPlansPanel = React.lazy(() => import("./components/SavedPlansPanel.jsx"));
+const BacktestView = React.lazy(() => import("./components/results/BacktestView.jsx"));
 
-const TARGETS = [10, 25, 50, 100, 200];
-// ── API BASE — points to your Vercel proxy, not CoinGecko directly ────────────
-// The proxy caches all responses server-side so CoinGecko only gets hit once
-// per cache window, no matter how many users are on the app simultaneously.
-const PROXY = "/api/coins";
-const CACHE_TTL = 12 * 60 * 60 * 1000;
-const PRICE_TTL = 60 * 1000;
-
-const G = {
-  bg:"#F7FDF9", surface:"#FFFFFF", surfaceAlt:"#F0FBF4",
-  green:"#16A34A", green2:"#15803D", greenPale:"#DCFCE7", greenBorder:"#BBF7D0",
-  dark:"#052E16", text:"#1A2E1A", sub:"#166534", muted:"#6B7280", border:"#E2F5E9",
-  red:"#DC2626", redPale:"#FEF2F2", redBorder:"#FECACA",
-  amber:"#B45309", amberPale:"#FFFBEB", amberBorder:"#FDE68A",
-  blue:"#1D4ED8", bluePale:"#EFF6FF",
-};
-
-// ─── CACHE ────────────────────────────────────────────────────────────────────
-const cache = {
-  get(k,ttl=CACHE_TTL){try{const r=localStorage.getItem("cmv_"+k);if(!r)return null;const{d,t}=JSON.parse(r);return Date.now()-t<ttl?d:null;}catch{return null;}},
-  set(k,d){try{localStorage.setItem("cmv_"+k,JSON.stringify({d,t:Date.now()}));}catch{}},
-  stale(k){try{const r=localStorage.getItem("cmv_"+k);return r?JSON.parse(r).d:null;}catch{return null;}},
-};
-
-// ─── API — TOP 250 via 3 parallel calls ───────────────────────────────────────
-async function getCoins() {
-  const hit = cache.get("coins250");
-  if (hit) return hit;
-  try {
-    // Single call to your proxy — proxy handles the 3 CoinGecko pages internally
-    const res = await fetch(`${PROXY}?type=list`);
-    if (!res.ok) throw new Error("Proxy error");
-    const top = await res.json();
-    cache.set("coins250", top);
-    return top;
-  } catch {
-    const stale = cache.stale("coins250");
-    if (stale) return stale;
-    throw new Error("Could not load coins. Check your connection and refresh.");
-  }
+// Deterministic seed from the plan config → reproducible Monte Carlo runs.
+function planSeed(coinId, config) {
+  const s = `${coinId}|${config.capital}|${config.freqId}|${config.months}|${config.targetPct}`;
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
 }
 
-async function getLivePrice(id) {
-  const hit = cache.get("lp_"+id, PRICE_TTL);
-  if (hit) return hit;
-  try {
-    const r = await fetch(`${PROXY}?type=price&id=${id}`);
-    if (!r.ok) return null;
-    const d = await r.json();
-    if (!d[id]) return null;
-    const result = { price: d[id].usd, change24h: d[id].usd_24h_change || 0 };
-    cache.set("lp_"+id, result);
-    return result;
-  } catch { return null; }
-}
-
-async function getHistory(id) {
-  const hit = cache.get("h_"+id);
-  if (hit) return hit;
-  try {
-    const r = await fetch(`${PROXY}?type=history&id=${id}`);
-    if (!r.ok) throw new Error();
-    const d = await r.json();
-    cache.set("h_"+id, d);
-    return d;
-  } catch {
-    const stale = cache.stale("h_"+id);
-    if (stale) return stale;
-    throw new Error("Could not load price history.");
-  }
-}
-
-// ─── MATHS ────────────────────────────────────────────────────────────────────
-const avg = a => a.reduce((s,v)=>s+v,0)/a.length;
-const std = a => { const m=avg(a); return Math.sqrt(a.reduce((s,v)=>s+(v-m)**2,0)/a.length); };
-
-function analyzeMarket(prices) {
-  const vals = prices.map(p=>p[1]);
-  const ma30=avg(vals.slice(-30)), ma90=avg(vals.slice(-90));
-  const vol30=std(vals.slice(-30)), cur=vals[vals.length-1], oldest=vals[0];
-  const volPct=(vol30/cur)*100;
-  const momentum=((cur-oldest)/oldest)*100;
-  const mn=Math.min(...vals), mx=Math.max(...vals);
-  const nearLow=(cur-mn)/(mx-mn||1);
-  let trend="Ranging";
-  if (cur>ma30*1.02&&ma30>ma90) trend="Uptrend";
-  else if (cur<ma30*0.98&&ma30<ma90) trend="Downtrend";
-  const score =
-    (trend==="Uptrend"?2:trend==="Downtrend"?-2:0)+
-    (momentum>20?2:momentum>0?1:momentum>-20?-1:-2)+
-    (nearLow<0.35?1:nearLow>0.75?-1:0);
-  let verdict, verdictColor, verdictBg, verdictDesc;
-  if (score>=3)      { verdict="Strong Setup";  verdictColor=G.green; verdictBg=G.greenPale; verdictDesc="Price action looks solid. Trend and momentum are on your side."; }
-  else if (score>=1) { verdict="Decent Setup";  verdictColor=G.blue;  verdictBg=G.bluePale;  verdictDesc="Conditions are okay. DCA helps reduce your timing risk here."; }
-  else if (score>=-1){ verdict="Mixed Signals"; verdictColor=G.amber; verdictBg=G.amberPale; verdictDesc="Market is uncertain. Keep position sizes smaller than usual."; }
-  else               { verdict="Weak Setup";    verdictColor=G.red;   verdictBg=G.redPale;   verdictDesc="Price action is poor. Expect a tough road before profit."; }
-  return { ma30, ma90, vol30, volPct, cur, trend, momentum, nearLow, verdict, verdictColor, verdictBg, verdictDesc, score };
-}
-
-function smooth(prices, w=3) {
-  return prices.map((_,i) => avg(prices.slice(Math.max(0,i-w+1),i+1).map(x=>x[1])));
-}
-
-function runSim({ capital, freqId, months, targetPct, prices, livePrice }) {
-  const freq = FREQS.find(f=>f.id===freqId);
-  const entries = Math.min(180, Math.max(4, Math.round((months*30)/freq.days)));
-  const amtPer = capital/entries;
-
-  // Live price is the anchor — always what user sees right now
-  const anchorPrice = livePrice || prices[prices.length-1][1];
-
-  // ── VOLATILITY WINDOW MATCHES CHOSEN DURATION ──────────────────────────────
-  // If user picks 3 months → use last 90 days of price data
-  // If user picks 1 month  → use last 30 days of price data
-  // This means the volatility and price range used for simulation
-  // reflects exactly the same period the user is planning to DCA over.
-  const windowDays = months * 30;
-  const allVals = prices.map(p=>p[1]);
-  // Each CoinGecko daily point = 1 day. Slice the last N days.
-  const windowVals = allVals.slice(-windowDays);
-  const windowPrices = windowVals.length >= 4 ? windowVals : allVals;
-
-  // ── VOLATILITY from the chosen window ──────────────────────────────────────
-  const windowAvg = avg(windowPrices);
-  const windowStd = std(windowPrices);
-  const windowMin = Math.min(...windowPrices);
-  const windowMax = Math.max(...windowPrices);
-  // Volatility as % of the window average price
-  const volPct = (windowStd / windowAvg);
-
-  // ── SIMULATE ENTRY PRICES ──────────────────────────────────────────────────
-  // We take the actual historical prices from the window and scale them
-  // so they are centred on today's live price.
-  // This preserves the real shape of price movement (dips, peaks, patterns)
-  // but anchors the whole range to where the coin is trading NOW.
-  //
-  // Example: window had prices from $30–$50 with avg $40, live price = $60
-  //   → each historical price is scaled by (60/40) = 1.5
-  //   → so the simulated range becomes $45–$75 centred on $60
-  //
-  // This is honest: it uses the actual volatility of the chosen period
-  // but does not use stale absolute prices as entry points.
-  const scaleFactor = anchorPrice / (windowAvg || anchorPrice);
-  const step = Math.max(1, Math.floor(windowPrices.length / entries));
-  const entryPrices = Array.from({length:entries}, (_,i) => {
-    const idx = Math.min(i * step, windowPrices.length - 1);
-    const scaled = windowPrices[idx] * scaleFactor;
-    return Math.max(scaled, anchorPrice * 0.01);
-  });
-
-  const totalTokens = entryPrices.reduce((s,p)=>s+amtPer/p, 0);
-  const avgEntry = capital/totalTokens;
-  const refPrice = anchorPrice;
-
-  // Target, flat and downside all calculated from LIVE PRICE (not avg entry)
-  const targetPrice = refPrice*(1+targetPct/100);
-  const targetVal = totalTokens*targetPrice;
-  const currentVal = totalTokens*refPrice;
-  const downVal = totalTokens*(refPrice*0.8);
-  const down50Val = totalTokens*(refPrice*0.5);
-
-  // Expose window stats for display
-  const simLow  = Math.min(...entryPrices);
-  const simHigh = Math.max(...entryPrices);
-
-  return {
-    entries, amtPer, avgEntry, totalTokens, refPrice,
-    targetPrice, targetVal,
-    targetProfit: targetVal-capital,
-    targetROI: ((targetVal-capital)/capital)*100,
-    currentVal, currentROI: ((currentVal-capital)/capital)*100,
-    flatVal: capital,
-    downVal, downLoss: downVal-capital,
-    down50Val, down50Loss: down50Val-capital,
-    simLow, simHigh, volPct: volPct*100, windowDays,
-  };
-}
-
-// ─── FORMAT ───────────────────────────────────────────────────────────────────
-const fmtUSD = n => {
-  const a=Math.abs(n), s=n<0?"-":"";
-  if (a>=1e6) return `${s}$${(a/1e6).toFixed(2)}M`;
-  if (a>=1e3) return `${s}$${a.toLocaleString("en-US",{minimumFractionDigits:0,maximumFractionDigits:0})}`;
-  return `${s}$${a.toFixed(2)}`;
-};
-const fmtPrice = n => n>=1000?`$${n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:n>=1?`$${n.toFixed(2)}`:`$${n.toPrecision(4)}`;
-const fmtPct = n => `${n>=0?"+":""}${n.toFixed(1)}%`;
-const fmtTok = n => n<0.001?n.toFixed(8):n<1?n.toFixed(4):n<1000?n.toFixed(3):n.toFixed(1);
-
-// ─── CANVAS CARD — 1200×675 landscape (perfect for X feed) ───────────────────
-function rr(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.arcTo(x+w,y,x+w,y+r,r);ctx.lineTo(x+w,y+h-r);ctx.arcTo(x+w,y+h,x+w-r,y+h,r);ctx.lineTo(x+r,y+h);ctx.arcTo(x,y+h,x,y+h-r,r);ctx.lineTo(x,y+r);ctx.arcTo(x,y,x+r,y,r);ctx.closePath();}
-
-// Load any image — external CoinGecko URLs are routed through the proxy
-// to bypass CORS restrictions that prevent canvas from drawing them directly.
-function loadImg(src) {
-  return new Promise(res => {
-    if (!src) return res(null);
-    const isCoinGecko = src.includes("coingecko.com");
-    const url = isCoinGecko ? `${PROXY}?type=image&url=${encodeURIComponent(src)}` : src;
-    const i = new Image();
-    i.crossOrigin = "anonymous";
-    i.onload = () => res(i);
-    i.onerror = () => res(null);
-    i.src = url;
-  });
-}
-
-async function makeCard({ asset, sim, targetPct, months, freqId, userName, profileImg, analysis, livePrice }) {
-  const W=1200, H=675, cv=document.createElement("canvas");
-  cv.width=W; cv.height=H;
-  const ctx = cv.getContext("2d");
-  const freq = FREQS.find(f=>f.id===freqId);
-  const good = analysis.score>=1;
-  const totalInvested = sim.amtPer*sim.entries;
-  const LP = Math.round(W*0.36); // left green panel width
-  const RX = LP+1, RW = W-LP, PAD = 38;
-
-  // ── BG ──
-  ctx.fillStyle="#F0FDF4"; ctx.fillRect(0,0,W,H);
-
-  // ── LEFT GREEN PANEL ──
-  ctx.fillStyle="#16A34A"; ctx.fillRect(0,0,LP,H);
-  ctx.fillStyle="rgba(255,255,255,0.05)"; ctx.beginPath(); ctx.arc(LP*0.1,H*0.9,220,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle="rgba(255,255,255,0.04)"; ctx.beginPath(); ctx.arc(LP*0.9,-20,180,0,Math.PI*2); ctx.fill();
-
-  // CMVNG brand top-left
-  ctx.fillStyle="rgba(255,255,255,0.95)"; ctx.font="bold 24px Arial"; ctx.textAlign="left";
-  ctx.fillText("CMVNG", 24, 40);
-  ctx.fillStyle="rgba(255,255,255,0.4)"; ctx.font="13px Arial";
-  ctx.fillText("DCA Simulator", 24, 58);
-
-  const liveP = livePrice?.price || asset.current_price;
-  const panelCX = LP/2;
-
-  // ── LARGE PFP — top half of left panel ──
-  if (profileImg) {
-    const PFP_R = 80; // radius — large and prominent
-    const PFP_Y = H*0.30;
-    const pimg = await loadImg(profileImg);
-    // Always draw the circle — green fill behind so no grey ring if image fails
-    // Outer glow ring
-    ctx.fillStyle="rgba(255,255,255,0.15)";
-    ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R+10, 0, Math.PI*2); ctx.fill();
-    // Green fill behind image (covers any grey browser default)
-    ctx.fillStyle="#15803D";
-    ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R, 0, Math.PI*2); ctx.fill();
-    if (pimg) {
-      // Clip image to perfect circle — no grey ring
-      ctx.save();
-      ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R, 0, Math.PI*2); ctx.clip();
-      // Draw image slightly larger than radius to ensure full coverage
-      ctx.drawImage(pimg, panelCX-PFP_R, PFP_Y-PFP_R, PFP_R*2, PFP_R*2);
-      ctx.restore();
-    }
-    // Clean white border on top
-    ctx.strokeStyle="rgba(255,255,255,0.9)"; ctx.lineWidth=4;
-    ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R+2, 0, Math.PI*2); ctx.stroke();
-    // Green accent ring
-    ctx.strokeStyle="#4ADE80"; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R+6, 0, Math.PI*2); ctx.stroke();
-    // name under PFP
-    if (userName) {
-      ctx.fillStyle="#FFFFFF"; ctx.font="bold 20px Arial"; ctx.textAlign="center";
-      ctx.fillText(userName, panelCX, PFP_Y+PFP_R+26);
-      ctx.fillStyle="rgba(255,255,255,0.5)"; ctx.font="13px Arial";
-      ctx.fillText("DCA Strategy", panelCX, PFP_Y+PFP_R+44);
-    }
-    // ── TOKEN LOGO — bottom half ──
-    const TL_Y = H*0.68;
-    const TL_R2 = 38;
-    // White fill behind logo so it looks clean
-    ctx.fillStyle="rgba(255,255,255,0.95)";
-    ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R2, 0, Math.PI*2); ctx.fill();
-    if (asset.image) {
-      const logo = await loadImg(asset.image);
-      if (logo) {
-        ctx.save(); ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R2, 0, Math.PI*2); ctx.clip();
-        ctx.drawImage(logo, panelCX-TL_R2, TL_Y-TL_R2, TL_R2*2, TL_R2*2); ctx.restore();
-      }
-    }
-    ctx.strokeStyle="rgba(255,255,255,0.5)"; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R2+3, 0, Math.PI*2); ctx.stroke();
-    ctx.fillStyle="#FFFFFF"; ctx.font="bold 36px Arial"; ctx.textAlign="center";
-    ctx.fillText(asset.symbol.toUpperCase(), panelCX, TL_Y+60);
-    ctx.fillStyle="rgba(255,255,255,0.55)"; ctx.font="14px Arial";
-    ctx.fillText(asset.name, panelCX, TL_Y+80);
-    ctx.fillStyle="#FFFFFF"; ctx.font="bold 22px Arial";
-    ctx.fillText(fmtPrice(liveP), panelCX, TL_Y+108);
-  } else {
-    // No PFP — token logo is the hero, large and centred
-    const TL_Y = H*0.38;
-    const TL_R = 70;
-    // White fill behind logo for clean display on green panel
-    ctx.fillStyle="rgba(255,255,255,0.95)";
-    ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R, 0, Math.PI*2); ctx.fill();
-    if (asset.image) {
-      const logo = await loadImg(asset.image);
-      if (logo) {
-        ctx.save(); ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R, 0, Math.PI*2); ctx.clip();
-        ctx.drawImage(logo, panelCX-TL_R, TL_Y-TL_R, TL_R*2, TL_R*2); ctx.restore();
-      }
-    }
-    ctx.strokeStyle="rgba(255,255,255,0.6)"; ctx.lineWidth=3;
-    ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R+4, 0, Math.PI*2); ctx.stroke();
-    ctx.fillStyle="#FFFFFF"; ctx.font="bold 56px Arial"; ctx.textAlign="center";
-    ctx.fillText(asset.symbol.toUpperCase(), panelCX, TL_Y+TL_R+58);
-    ctx.fillStyle="rgba(255,255,255,0.6)"; ctx.font="17px Arial";
-    ctx.fillText(asset.name, panelCX, TL_Y+TL_R+82);
-    ctx.fillStyle="#FFFFFF"; ctx.font="bold 26px Arial";
-    ctx.fillText(fmtPrice(liveP), panelCX, TL_Y+TL_R+118);
-    if (userName) {
-      ctx.fillStyle="rgba(255,255,255,0.7)"; ctx.font="bold 15px Arial";
-      ctx.fillText(userName, panelCX, TL_Y+TL_R+144);
-    }
-  }
-
-  // 24h change pill
-  if (livePrice?.change24h!==undefined) {
-    const chg=livePrice.change24h, up=chg>=0;
-    const chgTxt=`${fmtPct(chg)} today`;
-    const tw=ctx.measureText(chgTxt).width+22;
-    const pillY = H-100;
-    rr(ctx,panelCX-tw/2,pillY,tw,28,14);
-    ctx.fillStyle=up?"rgba(255,255,255,0.2)":"rgba(220,38,38,0.5)"; ctx.fill();
-    ctx.fillStyle="#FFFFFF"; ctx.font="bold 14px Arial"; ctx.textAlign="center";
-    ctx.fillText(chgTxt, panelCX, pillY+19);
-  }
-
-  // trend badge bottom
-  const trendColor=analysis.trend==="Uptrend"?"#4ADE80":analysis.trend==="Downtrend"?"#FCA5A5":"#FDE68A";
-  ctx.fillStyle=trendColor; ctx.font="bold 15px Arial"; ctx.textAlign="center";
-  ctx.fillText(analysis.trend.toUpperCase(), panelCX, H-64);
-  ctx.fillStyle="rgba(255,255,255,0.4)"; ctx.font="12px Arial";
-  const vLabel=analysis.score>=3?"Strong Setup":analysis.score>=1?"Decent Setup":analysis.score>=-1?"Mixed Signals":"Weak Setup";
-  ctx.fillText(vLabel, panelCX, H-46);
-
-  // ── RIGHT WHITE PANEL ──
-
-  // plan header
-  ctx.fillStyle=G.dark; ctx.font="bold 15px Arial"; ctx.textAlign="left";
-  ctx.fillText("MY DCA PLAN", RX+PAD, 46);
-  const planTxt=`${fmtUSD(sim.amtPer)} ${freq.label.toLowerCase()} · ${months} month${months>1?"s":""} · ${sim.entries} buys · ${fmtUSD(totalInvested)} total`;
-  ctx.fillStyle="#6B7280"; ctx.font="14px Arial";
-  ctx.fillText(planTxt, RX+PAD, 68);
-  // separator
-  ctx.strokeStyle="#E2F5E9"; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(RX+PAD,82); ctx.lineTo(W-PAD,82); ctx.stroke();
-
-  // Color is ALWAYS based on profit sign — green = positive, red = negative
-  // NEVER based on market verdict/score. A positive profit is always green.
-  const profitColor = sim.targetProfit >= 0 ? "#16A34A" : "#DC2626";
-
-  // target label — always green since target is always a gain from live price
-  ctx.fillStyle="#16A34A"; ctx.font="bold 14px Arial"; ctx.textAlign="left";
-  ctx.fillText(`IF ${asset.symbol.toUpperCase()} HITS +${targetPct}%  →  ${fmtPrice(sim.targetPrice)}`, RX+PAD, 110);
-
-  // BIG NUMBER — always dark, clean
-  ctx.fillStyle=G.dark; ctx.font="bold 84px Arial";
-  ctx.fillText(fmtUSD(sim.targetVal), RX+PAD, 202);
-
-  // profit + ROI pill — always green (it's always a positive target)
-  ctx.fillStyle=profitColor; ctx.font="bold 20px Arial";
-  const profitTxt=`Profit: +${fmtUSD(sim.targetProfit)}`;
-  ctx.fillText(profitTxt, RX+PAD, 234);
-  const profW=ctx.measureText(profitTxt).width;
-  const roiTxt=`+${sim.targetROI.toFixed(0)}% return`;
-  const roiW=ctx.measureText(roiTxt).width+24;
-  rr(ctx,RX+PAD+profW+14,215,roiW,26,13);
-  ctx.fillStyle=profitColor; ctx.fill();
-  ctx.fillStyle="#fff"; ctx.font="bold 13px Arial";
-  ctx.fillText(roiTxt, RX+PAD+profW+26, 233);
-
-  // separator
-  ctx.strokeStyle="#E2F5E9"; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(RX+PAD,252); ctx.lineTo(W-PAD,252); ctx.stroke();
-
-  // scenarios header
-  ctx.fillStyle="#9CA3AF"; ctx.font="bold 11px Arial"; ctx.textAlign="left";
-  ctx.fillText("OTHER SCENARIOS", RX+PAD, 272);
-
-  // 3 scenario columns
-  const colW=(RW-PAD*2)/3;
-  [
-    {label:"Price stays flat", val:sim.flatVal, change:"±0%", note:"Breakeven", c:"#B45309", bg:"#FFFBEB", brd:"#FDE68A"},
-    {label:`Drops 20%`, val:sim.downVal, change:"-20%", note:`−${fmtUSD(Math.abs(sim.downLoss))}`, c:"#DC2626", bg:"#FEF2F2", brd:"#FECACA"},
-    {label:`Crashes 50%`, val:sim.down50Val, change:"-50%", note:`−${fmtUSD(Math.abs(sim.down50Loss))}`, c:"#9F1239", bg:"#FFF1F2", brd:"#FDA4AF"},
-  ].forEach((sc,i)=>{
-    const sx=RX+PAD+i*colW, sy=282, sw=colW-10, sh=138;
-    rr(ctx,sx,sy,sw,sh,10); ctx.fillStyle=sc.bg; ctx.fill();
-    ctx.strokeStyle=sc.brd; ctx.lineWidth=1.5; ctx.stroke();
-    ctx.fillStyle=sc.c; ctx.font="bold 11px Arial"; ctx.textAlign="left";
-    ctx.fillText(sc.label, sx+12, sy+22);
-    ctx.fillStyle=G.dark; ctx.font="bold 28px Arial";
-    ctx.fillText(fmtUSD(sc.val), sx+12, sy+64);
-    ctx.fillStyle=sc.c; ctx.font="bold 15px Arial";
-    ctx.fillText(sc.change, sx+12, sy+90);
-    ctx.fillStyle="#6B7280"; ctx.font="13px Arial";
-    ctx.fillText(sc.note, sx+12, sy+112);
-  });
-
-  // current value + avg entry bar
-  const infoY=438;
-  rr(ctx,RX+PAD,infoY,RW-PAD*2,56,8);
-  ctx.fillStyle="#F8FAFC"; ctx.fill(); ctx.strokeStyle="#E2F5E9"; ctx.lineWidth=1; ctx.stroke();
-  ctx.fillStyle="#9CA3AF"; ctx.font="bold 11px Arial"; ctx.textAlign="left";
-  ctx.fillText("VALUE AT LIVE PRICE", RX+PAD+14, infoY+18);
-  ctx.fillStyle=G.dark; ctx.font="bold 21px Arial";
-  ctx.fillText(fmtUSD(sim.currentVal), RX+PAD+14, infoY+44);
-  const mid=RX+PAD+(RW-PAD*2)/2;
-  ctx.strokeStyle="#E2F5E9"; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(mid,infoY+8); ctx.lineTo(mid,infoY+48); ctx.stroke();
-  ctx.fillStyle="#9CA3AF"; ctx.font="bold 11px Arial"; ctx.textAlign="left";
-  ctx.fillText("AVG ENTRY PRICE", mid+14, infoY+18);
-  ctx.fillStyle=G.dark; ctx.font="bold 21px Arial";
-  ctx.fillText(fmtPrice(sim.avgEntry), mid+14, infoY+44);
-
-  // footer
-  ctx.fillStyle="#CBD5E1"; ctx.font="12px Arial"; ctx.textAlign="left";
-  ctx.fillText("Not financial advice · DYOR", RX+PAD, H-18);
-  ctx.fillStyle="#16A34A"; ctx.font="bold 12px Arial"; ctx.textAlign="right";
-  ctx.fillText("cmvng.app", W-PAD, H-18);
-  // left panel footer
-  ctx.fillStyle="rgba(255,255,255,0.2)"; ctx.font="11px Arial"; ctx.textAlign="center";
-  ctx.fillText("Not financial advice · DYOR", LP/2, H-18);
-
-  return cv.toDataURL("image/png");
-}
-
-// ─── SMALL UI COMPONENTS ──────────────────────────────────────────────────────
-function Dot() {
-  return (
-    <span style={{width:8,height:8,borderRadius:"50%",background:G.green,display:"inline-block",animation:"pulse 1.2s infinite"}}>
-      <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}`}</style>
-    </span>
-  );
-}
-
-// Coin logo <img> — routes through proxy to fix CORS on canvas
-// For regular <img> tags in the UI, direct URLs work fine.
-// This component just adds a fallback initials circle if the image fails.
-function CoinImg({ src, symbol, size=30 }) {
-  const [err, setErr] = React.useState(false);
-  if (err || !src) {
-    return (
-      <div style={{width:size,height:size,borderRadius:"50%",background:G.greenPale,border:`1px solid ${G.greenBorder}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:size*0.38,fontWeight:800,color:G.green}}>
-        {(symbol||"?").slice(0,2).toUpperCase()}
-      </div>
-    );
-  }
-  return <img src={src} alt={symbol} style={{width:size,height:size,borderRadius:"50%",flexShrink:0,objectFit:"cover"}} onError={()=>setErr(true)}/>;
-}
-function Spinner() {
-  return (
-    <span style={{display:"inline-flex",gap:5,alignItems:"center"}}>
-      {[0,1,2].map(i=>(
-        <span key={i} style={{width:7,height:7,borderRadius:"50%",background:"#fff",display:"inline-block",animation:`bop 0.7s ${i*0.15}s infinite alternate`}}/>
-      ))}
-      <style>{`@keyframes bop{from{transform:translateY(0)}to{transform:translateY(-5px)}}`}</style>
-    </span>
-  );
-}
-function TrendPill({trend}) {
-  const map={Uptrend:[G.green,G.greenPale,G.greenBorder],Downtrend:[G.red,G.redPale,G.redBorder],Ranging:[G.amber,G.amberPale,G.amberBorder]};
-  const [c,bg,b]=map[trend]||map.Ranging;
-  return <span style={{background:bg,color:c,border:`1px solid ${b}`,borderRadius:20,padding:"3px 12px",fontSize:12,fontWeight:700}}>{trend}</span>;
-}
-function PctBadge({val}) {
-  const up=val>=0;
-  return <span style={{background:up?G.greenPale:G.redPale,color:up?G.green:G.red,border:`1px solid ${up?G.greenBorder:G.redBorder}`,borderRadius:20,padding:"2px 10px",fontSize:13,fontWeight:700}}>{fmtPct(val)}</span>;
-}
-
-// ─── SHARED STYLES ────────────────────────────────────────────────────────────
-const inp = {width:"100%",boxSizing:"border-box",border:`1.5px solid ${G.border}`,borderRadius:12,padding:"11px 14px",fontSize:16,fontFamily:"inherit",color:G.text,background:G.surfaceAlt,outline:"none",transition:"border-color 0.15s"};
-const card = {background:G.surface,border:`1px solid ${G.border}`,borderRadius:18,padding:"22px",marginBottom:14,boxShadow:"0 1px 4px rgba(22,163,74,0.05)"};
-const secLabel = {fontSize:12,fontWeight:800,color:G.green,letterSpacing:2,textTransform:"uppercase",marginBottom:14,display:"flex",alignItems:"center",gap:7};
-const stepNum = {width:20,height:20,borderRadius:"50%",background:G.green,color:"#fff",fontSize:11,fontWeight:800,display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0};
-const statRow = {display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:`1px solid ${G.border}`};
-
-// ─── SHARE CARD MODAL/PANEL ───────────────────────────────────────────────────
-function SharePanel({ selected, sim, targetPct, months, freqId, analysis, livePrice }) {
-  const [userName, setUserName] = useState("");
-  const [profileImg, setProfileImg] = useState(null);
-  const [genCard, setGenCard] = useState(false);
-  const [cardUrl, setCardUrl] = useState(null);
-
-  const handleCard = async () => {
-    if (!sim||!selected||!analysis) return;
-    setGenCard(true);
-    try {
-      const url = await makeCard({ asset:selected, sim, targetPct, months, freqId, userName:userName.trim(), profileImg, analysis, livePrice });
-      setCardUrl(url);
-    } catch(e) { console.error(e); }
-    setGenCard(false);
-  };
-
-  return (
-    <div style={{...card, background:"#052E16", border:"2px solid #4ADE80", marginBottom:14}}>
-      {/* header */}
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
-        <span style={{fontSize:22}}>🔥</span>
-        <div>
-          <div style={{fontSize:15,fontWeight:900,color:"#4ADE80",letterSpacing:0.5}}>Share Your Strategy</div>
-          <div style={{fontSize:12,color:"rgba(255,255,255,0.5)",marginTop:1}}>Generate a card optimised for X — takes 2 seconds</div>
-        </div>
-      </div>
-
-      <div style={{height:1,background:"rgba(74,222,128,0.2)",margin:"12px 0"}}/>
-
-      {/* name input */}
-      <div style={{marginBottom:10}}>
-        <label style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.6)",display:"block",marginBottom:5}}>Your name on the card</label>
-        <input type="text" placeholder="e.g. Alex or @alex_dca" maxLength={28} value={userName}
-          onChange={e=>setUserName(e.target.value)}
-          style={{...inp, background:"rgba(255,255,255,0.08)", border:"1.5px solid rgba(74,222,128,0.3)", color:"#fff"}}
-          onFocus={e=>e.target.style.borderColor="#4ADE80"}
-          onBlur={e=>e.target.style.borderColor="rgba(74,222,128,0.3)"}
-        />
-      </div>
-
-      {/* photo upload */}
-      <label style={{display:"block",padding:"9px 14px",background:"rgba(255,255,255,0.06)",border:"1.5px dashed rgba(74,222,128,0.35)",borderRadius:10,cursor:"pointer",color:"rgba(255,255,255,0.5)",fontSize:13,textAlign:"center",marginBottom:12}}>
-        {profileImg ? "✅ Photo added — click to swap" : "📷 Add profile photo (optional)"}
-        <input type="file" accept="image/*" onChange={e=>{
-          const f=e.target.files[0]; if(!f)return;
-          const r=new FileReader(); r.onload=ev=>setProfileImg(ev.target.result); r.readAsDataURL(f);
-        }} style={{display:"none"}}/>
-      </label>
-
-      {/* generate button */}
-      <button onClick={handleCard} disabled={genCard} style={{
-        width:"100%",padding:"14px",borderRadius:12,cursor:genCard?"not-allowed":"pointer",
-        fontFamily:"inherit",fontSize:15,fontWeight:900,border:"none",
-        background:genCard?"#374151":"#16A34A",
-        color:genCard?"#6B7280":"#fff",
-        boxShadow:genCard?"none":"0 4px 20px rgba(22,163,74,0.4)",
-        transition:"all 0.2s",marginBottom:12,
-      }}>
-        {genCard ? <><Spinner/>&nbsp; Generating your card…</> : "⚡ Generate My Card"}
-      </button>
-
-      {/* card preview + download */}
-      {cardUrl && (
-        <div>
-          <img src={cardUrl} alt="Your share card" style={{width:"100%",borderRadius:10,marginBottom:10,border:"1px solid rgba(74,222,128,0.3)"}}/>
-          <button onClick={()=>{const a=document.createElement("a");a.href=cardUrl;a.download=`cmvng-${selected.symbol}-dca-x.png`;a.click();}}
-            style={{width:"100%",padding:"13px",borderRadius:12,cursor:"pointer",fontFamily:"inherit",fontSize:15,fontWeight:800,border:"2px solid #4ADE80",background:"rgba(74,222,128,0.1)",color:"#4ADE80"}}>
-            ⬇ Download — Ready for X, Instagram & Telegram
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [assets,setAssets]   = useState([]);
-  const [loading,setLoading] = useState(true);
-  const [err,setErr]         = useState(null);
-  const [loadingProgress,setLoadingProgress] = useState(0);
+  const coinsApi = useCoins();
+  const [selected, setSelected] = useState(null);
+  const market = useMarketData(selected);
+  const simApi = useSimulation();
+  const saved = useSavedPlans();
 
-  const [search,setSearch]   = useState("");
-  const [dropOpen,setDropOpen] = useState(false);
-  const [selected,setSelected] = useState(null);
-  const [livePrice,setLivePrice] = useState(null);
-  const [loadingLive,setLoadingLive] = useState(false);
-  const [history,setHistory] = useState(null);
-  const [analysis,setAnalysis] = useState(null);
-  const [loadingHist,setLoadingHist] = useState(false);
+  const [capital, setCapital] = useState(500);
+  const [freqId, setFreqId] = useState("daily");
+  const [months, setMonths] = useState(3);
+  const [targetPct, setTargetPct] = useState(50);
+  const [advanced, setAdvanced] = useState({ feePct: 0, feeFixed: 0, slippagePct: 0, hybridPct: 30, monteCarlo: false });
+  const [mode, setMode] = useState("scenario"); // scenario | backtest
+  const [backtestOffsetMonths, setBacktestOffsetMonths] = useState(6);
+  const [showSaved, setShowSaved] = useState(false);
+  const [planSaved, setPlanSaved] = useState(false);
+  const [sharedBanner, setSharedBanner] = useState(false);
+  const pendingUrlPlan = useRef(decodePlanFromHash());
 
-  const [capital,setCapital]   = useState(500);
-  const [capitalDisplay,setCapitalDisplay] = useState("500");
-  const [freqId,setFreqId]     = useState("daily");
-  const [months,setMonths]     = useState(3);
-  const [targetPct,setTargetPct] = useState(50);
-
-  const [simState,setSimState] = useState("idle"); // idle | running | done
-  const [sim,setSim]           = useState(null);
-  const [simMsg,setSimMsg]     = useState("");
-
-  // sticky bar ref for smooth scroll
   const shareRef = useRef(null);
-  const timerRef = useRef(null);
+  const freq = getFreq(freqId);
+  const maxMo = freq.maxMonths;
+  const safeMo = Math.min(months, maxMo);
+  const capitalOk = validateCapital(capital).ok;
 
-  const freq    = FREQS.find(f=>f.id===freqId);
-  const maxMo   = freq.maxMonths;
-  const safeMo  = Math.min(months, maxMo);
+  useEffect(() => { if (months > maxMo) setMonths(maxMo); }, [freqId, months, maxMo]);
+  useEffect(() => { setPlanSaved(false); }, [selected, capital, freqId, months, targetPct]);
 
-  // ── Load top 250 ──
-  useEffect(()=>{
-    setLoadingProgress(10);
-    const t1=setTimeout(()=>setLoadingProgress(40),400);
-    const t2=setTimeout(()=>setLoadingProgress(75),900);
-    getCoins()
-      .then(d=>{ setAssets(d); setLoadingProgress(100); })
-      .catch(e=>setErr(e.message))
-      .finally(()=>{ setLoading(false); clearTimeout(t1); clearTimeout(t2); });
-    return ()=>{ clearTimeout(t1); clearTimeout(t2); };
-  },[]);
+  // Apply a shared plan from the URL once coins are loaded.
+  useEffect(() => {
+    const p = pendingUrlPlan.current;
+    if (!p || coinsApi.coins.length === 0) return;
+    const coin = coinsApi.coins.find(c => c.id === p.coinId);
+    if (coin) {
+      setSelected(coin);
+      if (p.capital) setCapital(p.capital);
+      if (p.freqId) setFreqId(p.freqId);
+      if (p.months) setMonths(p.months);
+      if (p.targetPct) setTargetPct(p.targetPct);
+      setAdvanced(a => ({
+        ...a,
+        feePct: p.feePct ?? a.feePct, feeFixed: p.feeFixed ?? a.feeFixed,
+        slippagePct: p.slippagePct ?? a.slippagePct, hybridPct: p.hybridPct ?? a.hybridPct,
+      }));
+      setSharedBanner(true);
+      track("shared_plan_opened", { coin: coin.id });
+    }
+    pendingUrlPlan.current = null;
+  }, [coinsApi.coins]);
 
-  useEffect(()=>{ if(months>maxMo) setMonths(maxMo); },[freqId]);
+  const config = useMemo(() => ({
+    capital: Number(capital) || 500, freqId, months: safeMo, targetPct,
+    feePct: advanced.feePct, feeFixed: advanced.feeFixed,
+    slippagePct: advanced.slippagePct, hybridPct: advanced.hybridPct,
+  }), [capital, freqId, safeMo, targetPct, advanced]);
 
-  // ── Live price polling ──
-  const pollLive = useCallback(async id=>{
-    setLoadingLive(true);
-    const lp=await getLivePrice(id);
-    if(lp) setLivePrice(lp);
-    setLoadingLive(false);
-  },[]);
+  const backtestOffsetDays = backtestOffsetMonths * 30;
+  const maxHistoryDays = market.history?.prices?.length || 0;
+  const backtestOptions = useMemo(() => {
+    const opts = [];
+    for (let m = safeMo; m <= 12; m++) {
+      if (m * 30 <= maxHistoryDays && m * 30 >= safeMo * 30) opts.push(m);
+    }
+    return opts;
+  }, [safeMo, maxHistoryDays]);
+  useEffect(() => {
+    if (mode === "backtest" && backtestOptions.length && !backtestOptions.includes(backtestOffsetMonths)) {
+      setBacktestOffsetMonths(backtestOptions[Math.min(1, backtestOptions.length - 1)]);
+    }
+  }, [mode, backtestOptions, backtestOffsetMonths]);
 
-  useEffect(()=>{
-    if(!selected) return;
-    clearInterval(timerRef.current);
-    setLivePrice(null); setHistory(null); setAnalysis(null);
-    setSim(null); setSimState("idle");
-    pollLive(selected.id);
-    timerRef.current = setInterval(()=>pollLive(selected.id), 30000);
-    setLoadingHist(true);
-    getHistory(selected.id)
-      .then(d=>{ setHistory(d); setAnalysis(analyzeMarket(d.prices)); })
-      .catch(()=>{})
-      .finally(()=>setLoadingHist(false));
-    return ()=>clearInterval(timerRef.current);
-  },[selected]);
-
-  // ── Simulate ──
-  const handleSim = async () => {
-    if (!history||!selected) return;
-    setSimState("running"); setSim(null);
-    const msgs=["Fetching live price…","Analysing 120 days of data…","Calculating your entries…","Almost there…"];
-    let i=0; setSimMsg(msgs[0]);
-    const iv=setInterval(()=>{ i=(i+1)%msgs.length; setSimMsg(msgs[i]); },700);
-    const lp=await getLivePrice(selected.id);
-    if(lp) setLivePrice(lp);
-    await new Promise(r=>setTimeout(r,1600));
-    clearInterval(iv);
-    setSim(runSim({ capital:Number(capital)||500, freqId, months:safeMo, targetPct, prices:history.prices, livePrice:lp?.price }));
-    setSimState("done");
+  const handleSim = () => {
+    simApi.run({ selected, history: market.history, mode, config, backtestOffsetDays });
   };
 
-  // ── Scroll to share panel ──
-  const scrollToShare = () => {
-    shareRef.current?.scrollIntoView({ behavior:"smooth", block:"start" });
+  const resetAll = () => {
+    setSelected(null); simApi.reset(); setSharedBanner(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const compareCoin = () => {
+    setSelected(null); simApi.reset();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const filtered = assets.filter(a=>
-    a.name.toLowerCase().includes(search.toLowerCase()) ||
-    a.symbol.toLowerCase().includes(search.toLowerCase())
-  );
+  const handleSavePlan = () => {
+    if (!simApi.sim || !selected) return;
+    saved.save({
+      coin: selected,
+      config,
+      mode,
+      seed: planSeed(selected.id, config),
+      headline: {
+        refPrice: simApi.sim.refPrice, targetPrice: simApi.sim.targetPrice,
+        targetVal: simApi.sim.targetVal, targetROI: simApi.sim.targetROI,
+        units: simApi.sim.units, avgEntry: simApi.sim.avgEntry,
+        totalInvested: simApi.sim.totalInvested, entries: simApi.sim.entries,
+      },
+    });
+    setPlanSaved(true);
+  };
 
-  const showSticky = simState==="done" && sim;
+  const loadSavedPlan = plan => {
+    const coin = coinsApi.coins.find(c => c.id === plan.coin.id);
+    if (coin) setSelected(coin); else return;
+    setCapital(plan.config.capital); setFreqId(plan.config.freqId);
+    setMonths(plan.config.months); setTargetPct(plan.config.targetPct);
+    setAdvanced(a => ({ ...a, feePct: plan.config.feePct || 0, feeFixed: plan.config.feeFixed || 0, slippagePct: plan.config.slippagePct || 0, hybridPct: plan.config.hybridPct ?? 30 }));
+    setShowSaved(false); simApi.reset();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const scrollToShare = () => shareRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  const showSticky = simApi.simState === "done" && (simApi.sim || simApi.backtestResult);
+  const canSimulate = selected && market.history && capitalOk && simApi.simState !== "running"
+    && (mode !== "backtest" || backtestOptions.length > 0);
+
+  const simView = simApi.sim
+    ? { ...simApi.sim, monteCarloOn: advanced.monteCarlo, seed: planSeed(selected?.id || "", config) }
+    : null;
 
   return (
-    <div style={{minHeight:"100vh",background:G.bg,fontFamily:"'Inter','Segoe UI',sans-serif",color:G.text,paddingBottom:showSticky?90:40}}>
+    <div style={{ minHeight: "100vh", background: G.bg, fontFamily: "'Inter','Segoe UI',sans-serif", color: G.text, paddingBottom: showSticky ? 90 : 40 }}>
+      <style>{GLOBAL_CSS}</style>
 
-      {/* ── STICKY BOTTOM BAR ── */}
+      {/* sticky action bar after a simulation */}
       {showSticky && (
         <div style={{
-          position:"fixed",bottom:0,left:0,right:0,zIndex:100,
-          background:"rgba(255,255,255,0.97)",
-          borderTop:`2px solid ${G.greenBorder}`,
-          backdropFilter:"blur(8px)",
-          padding:"10px 16px",
-          display:"flex",gap:10,alignItems:"center",
-          boxShadow:"0 -4px 24px rgba(22,163,74,0.12)",
+          position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100,
+          background: "rgba(255,255,255,0.97)", borderTop: `2px solid ${G.greenBorder}`,
+          backdropFilter: "blur(8px)", padding: "10px 16px",
+          display: "flex", gap: 10, alignItems: "center",
+          boxShadow: "0 -4px 24px rgba(22,163,74,0.12)",
         }}>
-          <button onClick={scrollToShare} style={{
-            flex:2,padding:"13px",borderRadius:12,cursor:"pointer",
-            fontFamily:"inherit",fontSize:15,fontWeight:900,border:"none",
-            background:G.green,color:"#fff",
-            boxShadow:"0 4px 16px rgba(22,163,74,0.35)",
-          }}>
-            🔥 Share Your Card
-          </button>
-          <button onClick={handleSim} disabled={simState==="running"} style={{
-            flex:1,padding:"13px",borderRadius:12,cursor:"pointer",
-            fontFamily:"inherit",fontSize:14,fontWeight:700,
-            border:`2px solid ${G.greenBorder}`,
-            background:G.greenPale,color:G.green,
-          }}>
+          {mode === "scenario" && (
+            <button onClick={scrollToShare} style={{ flex: 2, padding: "13px", borderRadius: 12, cursor: "pointer", fontFamily: "inherit", fontSize: 15, fontWeight: 900, border: "none", background: G.green, color: "#fff", boxShadow: "0 4px 16px rgba(22,163,74,0.35)" }}>
+              🔥 Share Your Plan
+            </button>
+          )}
+          <button onClick={handleSim} disabled={simApi.simState === "running"} style={{ flex: 1, padding: "13px", borderRadius: 12, cursor: "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: 700, border: `2px solid ${G.greenBorder}`, background: G.greenPale, color: G.green }}>
             Recalculate ↻
           </button>
         </div>
       )}
 
-      {/* ── NAV ── */}
-      <nav style={{background:G.surface,borderBottom:`1px solid ${G.border}`,padding:"0 20px",display:"flex",alignItems:"center",justifyContent:"space-between",height:62,position:"sticky",top:0,zIndex:50,boxShadow:"0 1px 8px rgba(22,163,74,0.07)"}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <div style={{width:34,height:34,background:G.green,borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:13}}>CM</div>
-          <span style={{fontWeight:800,fontSize:17,color:G.green}}>CMVNG</span>
-          <span style={{fontWeight:400,fontSize:14,color:G.muted}}> DCA Simulator</span>
-        </div>
-        <div style={{background:G.greenPale,color:G.green,border:`1px solid ${G.greenBorder}`,borderRadius:20,padding:"4px 12px",fontSize:12,fontWeight:700,display:"flex",alignItems:"center",gap:5}}>
-          <Dot/>Live · Top 250
-        </div>
-      </nav>
+      <Header onOpenSaved={() => setShowSaved(v => !v)} savedCount={saved.plans.length} />
 
-      <main style={{maxWidth:680,margin:"0 auto",padding:"28px 16px"}}>
+      <main style={{ maxWidth: 680, margin: "0 auto", padding: "28px 16px" }}>
 
-        {/* HERO */}
-        <div style={{textAlign:"center",marginBottom:32}}>
-          <h1 style={{fontSize:"clamp(24px,4.5vw,40px)",fontWeight:900,color:G.dark,margin:0,lineHeight:1.15}}>
-            How much could you make<br/><span style={{color:G.green}}>DCA-ing into crypto?</span>
-          </h1>
-          <p style={{color:G.muted,fontSize:15,marginTop:10,marginBottom:0}}>Pick a coin · Set your plan · Get real numbers · Share your strategy</p>
-        </div>
-
-        {/* ── STEP 1 — COIN ── */}
-        <div style={card}>
-          <div style={secLabel}><span style={stepNum}>1</span>Choose Your Coin</div>
-
-          {loading ? (
-            <div>
-              <div style={{fontSize:13,color:G.muted,marginBottom:8}}>Loading top 250 coins…</div>
-              <div style={{height:4,background:G.border,borderRadius:4,overflow:"hidden"}}>
-                <div style={{height:"100%",background:G.green,borderRadius:4,width:`${loadingProgress}%`,transition:"width 0.4s ease"}}/>
-              </div>
-            </div>
-          ) : err ? (
-            <div style={{color:G.red,fontSize:14}}>{err}</div>
-          ) : (
-            <div style={{position:"relative"}}>
-              <input
-                style={{...inp, paddingLeft:selected?48:14}}
-                value={selected?`${selected.name} (${selected.symbol.toUpperCase()})`:search}
-                onChange={e=>{ setSearch(e.target.value); if(selected) setSelected(null); setDropOpen(true); }}
-                onFocus={e=>{ e.target.style.borderColor=G.green; setDropOpen(true); }}
-                onBlur={e=>{ e.target.style.borderColor=G.border; setTimeout(()=>setDropOpen(false),180); }}
-                placeholder="Search Bitcoin, Ethereum, Solana… (250 coins)"
-              />
-              {selected && (
-                <div style={{position:"absolute",left:8,top:"50%",transform:"translateY(-50%)"}}>
-                  <CoinImg src={selected.image} symbol={selected.symbol} size={24}/>
-                </div>
-              )}
-
-              {dropOpen && !selected && (
-                <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,right:0,zIndex:200,background:G.surface,border:`1.5px solid ${G.border}`,borderRadius:14,maxHeight:300,overflowY:"auto",boxShadow:"0 8px 30px rgba(0,0,0,0.1)"}}>
-                  {filtered.slice(0,40).map((a,idx)=>(
-                    <div key={a.id}
-                      onMouseDown={()=>{ setSelected(a); setSearch(""); setDropOpen(false); }}
-                      style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",cursor:"pointer",borderBottom:idx<39?`1px solid ${G.border}`:"none"}}
-                      onMouseEnter={e=>e.currentTarget.style.background=G.surfaceAlt}
-                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}
-                    >
-                      <CoinImg src={a.image} symbol={a.symbol} size={30}/>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:14,fontWeight:600,color:G.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.name}</div>
-                        <div style={{fontSize:12,color:G.muted}}>{a.symbol.toUpperCase()} · #{a.market_cap_rank}</div>
-                      </div>
-                      <div style={{textAlign:"right",flexShrink:0}}>
-                        <div style={{fontSize:13,fontWeight:700,color:G.dark}}>{fmtPrice(a.current_price)}</div>
-                        <div style={{fontSize:11,color:(a.price_change_percentage_24h||0)>=0?G.green:G.red}}>{fmtPct(a.price_change_percentage_24h||0)}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {selected && (
-            <div style={{marginTop:14,padding:14,background:G.surfaceAlt,borderRadius:12,border:`1px solid ${G.border}`}}>
-              <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                <CoinImg src={selected.image} symbol={selected.symbol} size={36}/>
-                <div style={{flex:1}}>
-                  <div style={{fontWeight:700,fontSize:15}}>{selected.name} <span style={{color:G.muted,fontWeight:400,fontSize:12}}>#{selected.market_cap_rank}</span></div>
-                  {loadingLive
-                    ? <div style={{fontSize:12,color:G.muted}}>Getting live price…</div>
-                    : livePrice
-                      ? <div style={{display:"flex",alignItems:"center",gap:8,marginTop:2,flexWrap:"wrap"}}>
-                          <span style={{fontWeight:800,fontSize:18,color:G.dark}}>{fmtPrice(livePrice.price)}</span>
-                          <span style={{background:livePrice.change24h>=0?G.greenPale:G.redPale,color:livePrice.change24h>=0?G.green:G.red,border:`1px solid ${livePrice.change24h>=0?G.greenBorder:G.redBorder}`,borderRadius:20,padding:"2px 10px",fontSize:13,fontWeight:700}}>{fmtPct(livePrice.change24h)}</span>
-                          <span style={{fontSize:11,color:G.muted}}>· live</span>
-                        </div>
-                      : <div style={{fontSize:14,fontWeight:700}}>{fmtPrice(selected.current_price)}</div>
-                  }
-                </div>
-                {analysis && <TrendPill trend={analysis.trend}/>}
-              </div>
-              {loadingHist && <div style={{marginTop:8,fontSize:12,color:G.muted}}>Analysing 120-day price history…</div>}
-              {analysis && (
-                <div style={{marginTop:10,background:analysis.verdictBg,border:`1.5px solid ${analysis.verdictColor}40`,borderRadius:10,padding:"10px 14px",display:"flex",gap:10,alignItems:"flex-start"}}>
-                  <span style={{fontSize:16,flexShrink:0}}>
-                    {analysis.score>=3?"🔥":analysis.score>=1?"✅":analysis.score>=-1?"⚠️":"❌"}
-                  </span>
-                  <div>
-                    <div style={{fontWeight:800,fontSize:13,color:analysis.verdictColor}}>{analysis.verdict}</div>
-                    <div style={{fontSize:13,color:G.muted,marginTop:2}}>{analysis.verdictDesc}</div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* ── STEP 2 — STRATEGY ── */}
-        <div style={card}>
-          <div style={secLabel}><span style={stepNum}>2</span>Build Your Plan</div>
-
-          <div style={{marginBottom:18}}>
-            <label style={{fontSize:13,fontWeight:700,color:G.sub,display:"block",marginBottom:6}}>Total money to invest (USD)</label>
-            <div style={{position:"relative"}}>
-              <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:16,fontWeight:700,color:G.sub,pointerEvents:"none"}}>$</span>
-              <input
-                type="text"
-                inputMode="numeric"
-                style={{...inp, paddingLeft:28}}
-                value={capitalDisplay}
-                onChange={e=>{
-                  const raw=e.target.value.replace(/[^0-9]/g,"");
-                  const num=Math.max(1,Number(raw)||1);
-                  setCapital(num);
-                  setCapitalDisplay(raw===""?"":Number(raw).toLocaleString("en-US"));
-                }}
-                onFocus={e=>{ e.target.style.borderColor=G.green; setCapitalDisplay(String(capital)); }}
-                onBlur={e=>{ e.target.style.borderColor=G.border; setCapitalDisplay(capital.toLocaleString("en-US")); }}
-                placeholder="e.g. 1,000"
-              />
-            </div>
+        {sharedBanner && (
+          <div role="status" style={{ background: G.bluePale, border: "1px solid #BFDBFE", borderRadius: 12, padding: "10px 16px", marginBottom: 16, fontSize: 13, color: G.blue, fontWeight: 600 }}>
+            🔗 A shared plan was loaded from your link — review it below, then run the simulation.
           </div>
+        )}
 
-          <div style={{marginBottom:18}}>
-            <label style={{fontSize:13,fontWeight:700,color:G.sub,display:"block",marginBottom:8}}>How often do you buy?</label>
-            <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
-              {FREQS.map(f=>(
-                <button key={f.id} onClick={()=>setFreqId(f.id)} style={{flex:1,padding:"10px 4px",borderRadius:11,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,border:`2px solid ${freqId===f.id?G.green:G.border}`,background:freqId===f.id?G.green:G.surfaceAlt,color:freqId===f.id?"#fff":G.muted,transition:"all 0.15s"}}>
-                  {f.label}
-                </button>
-              ))}
-            </div>
-            <div style={{fontSize:12,color:G.muted,marginTop:6}}>
-              All frequencies support up to 6 months · Each buy: <strong>{fmtUSD(Number(capital)/Math.max(4,Math.round((safeMo*30)/freq.days)))}</strong>
-            </div>
-          </div>
-
-          <div style={{marginBottom:18}}>
-            <label style={{fontSize:13,fontWeight:700,color:G.sub,display:"block",marginBottom:8}}>
-              Over how long? <span style={{color:G.green,fontWeight:900}}>{safeMo} month{safeMo!==1?"s":""}</span>
-            </label>
-            <input type="range" min={1} max={maxMo} value={safeMo} step={1}
-              onChange={e=>setMonths(Number(e.target.value))}
-              style={{width:"100%",accentColor:G.green}}
+        {showSaved && (
+          <Suspense fallback={null}>
+            <SavedPlansPanel
+              plans={saved.plans}
+              onLoadPlan={loadSavedPlan}
+              onRemove={saved.remove}
+              onStartTracking={p => saved.startTracking(p.id, { startPrice: market.live?.price || p.headline.refPrice })}
+              onStopTracking={saved.stopTracking}
+              onClose={() => setShowSaved(false)}
             />
-            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:G.muted}}>
-              <span>1 month</span><span>{maxMo} months</span>
-            </div>
-          </div>
+          </Suspense>
+        )}
 
-          <div>
-            <label style={{fontSize:13,fontWeight:700,color:G.sub,display:"block",marginBottom:8}}>What gain are you aiming for?</label>
-            <div style={{display:"flex",gap:7}}>
-              {TARGETS.map(t=>(
-                <button key={t} onClick={()=>setTargetPct(t)} style={{flex:1,padding:"9px 0",borderRadius:10,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,border:`2px solid ${targetPct===t?G.green:G.border}`,background:targetPct===t?G.greenPale:G.surfaceAlt,color:targetPct===t?G.green:G.muted,transition:"all 0.15s"}}>
-                  +{t}%
-                </button>
-              ))}
-            </div>
-          </div>
+        {/* hero */}
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <h1 style={{ fontSize: "clamp(24px,4.5vw,40px)", fontWeight: 900, color: G.dark, margin: 0, lineHeight: 1.15 }}>
+            Build your crypto DCA plan.<br /><span style={{ color: G.green }}>Stress-test it. Share it.</span>
+          </h1>
+          <p style={{ color: G.muted, fontSize: 15, marginTop: 10, marginBottom: 0 }}>
+            Pick a coin · Set your plan · Test scenarios against real market data · Not a prediction — a decision tool
+          </p>
         </div>
 
-        {/* ── SIMULATE BUTTON ── */}
-        {selected && history && (
-          <button onClick={handleSim} disabled={simState==="running"} style={{
-            width:"100%",padding:"16px",borderRadius:14,cursor:simState==="running"?"not-allowed":"pointer",
-            fontFamily:"inherit",fontSize:17,fontWeight:800,border:"none",
-            background:simState==="running"?"#D1D5DB":`linear-gradient(135deg,${G.green},${G.green2})`,
-            color:simState==="running"?"#9CA3AF":"#fff",
-            marginBottom:14,
-            boxShadow:simState==="running"?"none":"0 4px 18px rgba(22,163,74,0.32)",
-            transition:"all 0.2s",
+        {/* STEP 1 — coin */}
+        <section style={card} aria-label="Step 1: choose your coin">
+          <div style={secLabel}><span style={stepNum} aria-hidden="true">1</span>Choose Your Coin</div>
+          {coinsApi.loading ? (
+            <ProgressLoading label="Loading top 250 coins…" progress={coinsApi.progress} />
+          ) : coinsApi.error ? (
+            <ErrorState message={coinsApi.error} onRetry={coinsApi.retry} />
+          ) : (
+            <CoinSelector coins={coinsApi.coins} selected={selected} onSelect={setSelected} market={market} />
+          )}
+          {market.histError && selected && (
+            <div style={{ marginTop: 10 }}>
+              <ErrorState compact message={market.histError} onRetry={market.retryHistory} />
+            </div>
+          )}
+        </section>
+
+        {/* STEP 2 — plan */}
+        <section style={card} aria-label="Step 2: build your plan">
+          <div style={secLabel}><span style={stepNum} aria-hidden="true">2</span>Build Your Plan</div>
+          <CapitalInput capital={capital} onChange={setCapital} />
+          <FrequencySelector freqId={freqId} months={safeMo} onChange={setFreqId} />
+          <DurationSelector months={safeMo} maxMonths={maxMo} onChange={setMonths} />
+          <TargetSelector targetPct={targetPct} onChange={setTargetPct} />
+          <div style={{ marginTop: 16 }}>
+            <AdvancedOptions config={advanced} onChange={setAdvanced} />
+          </div>
+
+          {/* mode switch */}
+          <div role="radiogroup" aria-label="Simulation mode" style={{ display: "flex", gap: 8, marginTop: 4 }}>
+            {[
+              { id: "scenario", label: "Scenario simulation", desc: "Anchored to today's live price" },
+              { id: "backtest", label: "Historical backtest", desc: "Real past prices & dates" },
+            ].map(m => (
+              <button key={m.id} role="radio" aria-checked={mode === m.id}
+                onClick={() => { setMode(m.id); simApi.reset(); if (m.id === "backtest") track("historical_backtest_opened", {}); }}
+                style={{
+                  flex: 1, padding: "10px 8px", borderRadius: 11, cursor: "pointer", textAlign: "left",
+                  border: `2px solid ${mode === m.id ? G.green : G.border}`,
+                  background: mode === m.id ? G.greenPale : G.surfaceAlt,
+                }}>
+                <span style={{ display: "block", fontSize: 13, fontWeight: 800, color: mode === m.id ? G.green : G.muted }}>{m.label}</span>
+                <span style={{ display: "block", fontSize: 11, color: G.muted, marginTop: 2 }}>{m.desc}</span>
+              </button>
+            ))}
+          </div>
+
+          {mode === "backtest" && (
+            <div style={{ marginTop: 12 }}>
+              <label htmlFor="bt-start" style={{ fontSize: 13, fontWeight: 700, color: G.sub, display: "block", marginBottom: 6 }}>
+                If I had started my {safeMo * 30}-day plan…
+              </label>
+              {backtestOptions.length === 0 ? (
+                <div style={{ fontSize: 13, color: G.amber }}>
+                  {selected ? "Not enough price history for this coin and duration." : "Select a coin first."}
+                </div>
+              ) : (
+                <select id="bt-start" value={backtestOffsetMonths} onChange={e => setBacktestOffsetMonths(Number(e.target.value))}
+                  style={{ width: "100%", padding: "11px 14px", borderRadius: 12, border: `1.5px solid ${G.border}`, background: G.surfaceAlt, fontSize: 15, fontFamily: "inherit", color: G.text }}>
+                  {backtestOptions.map(m => (
+                    <option key={m} value={m}>{m} month{m > 1 ? "s" : ""} ago</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
+
+          <SchedulePreview selected={selected} capital={config.capital} freqId={freqId} months={safeMo} targetPct={targetPct} mode={mode} />
+        </section>
+
+        {/* simulate */}
+        {selected && market.history && (
+          <button onClick={handleSim} disabled={!canSimulate} style={{
+            width: "100%", padding: "16px", borderRadius: 14, cursor: canSimulate ? "pointer" : "not-allowed",
+            fontFamily: "inherit", fontSize: 17, fontWeight: 800, border: "none",
+            background: simApi.simState === "running" ? "#D1D5DB" : `linear-gradient(135deg,${G.green},${G.green2})`,
+            color: simApi.simState === "running" ? "#9CA3AF" : "#fff",
+            marginBottom: 14,
+            boxShadow: simApi.simState === "running" ? "none" : "0 4px 18px rgba(22,163,74,0.32)",
+            transition: "all 0.2s", opacity: canSimulate || simApi.simState === "running" ? 1 : 0.6,
           }}>
-            {simState==="running"
-              ? <><Spinner/>&nbsp; {simMsg}</>
-              : simState==="done"
+            {simApi.simState === "running"
+              ? <><Spinner />&nbsp; {simApi.simMsg}</>
+              : simApi.simState === "done"
                 ? "Recalculate ↻"
-                : "Show Me the Numbers →"
-            }
+                : mode === "backtest" ? "Run Historical Backtest →" : "Show Me the Numbers →"}
           </button>
         )}
 
-        {/* ── RESULTS ── */}
-        {simState==="done" && sim && selected && analysis && (()=>{
-          const totalInvested = sim.amtPer*sim.entries;
-          const aggressive    = targetPct > analysis.volPct*2;
-          const good          = analysis.score>=1;
+        {simApi.simError && <ErrorState message={simApi.simError} onRetry={handleSim} />}
 
-          return (
-            <>
-              {/* TARGET — main result */}
-              <div style={{borderRadius:18,padding:"24px",marginBottom:14,background:"linear-gradient(135deg,#F0FDF4,#DCFCE7)",border:`2px solid ${G.greenBorder}`}}>
-                <div style={{fontSize:12,fontWeight:800,color:G.green,letterSpacing:1.5,textTransform:"uppercase"}}>
-                  🎯 If your target hits
-                </div>
-                <div style={{fontSize:13,color:G.muted,marginTop:4}}>
-                  {selected.symbol.toUpperCase()} reaches {fmtPrice(sim.targetPrice)} (+{targetPct}%)
-                </div>
-                <div style={{fontSize:"clamp(36px,6vw,54px)",fontWeight:900,lineHeight:1.05,margin:"8px 0 4px",color:G.green}}>
-                  {fmtUSD(sim.targetVal)}
-                </div>
-                <div style={{fontSize:16,fontWeight:800,color:G.dark,marginBottom:aggressive?12:0}}>
-                  You profit <span style={{color:G.green}}>+{fmtUSD(sim.targetProfit)}</span> on {fmtUSD(totalInvested)} invested
-                  <span style={{background:G.green,color:"#fff",borderRadius:20,padding:"2px 12px",fontSize:14,marginLeft:8}}>+{sim.targetROI.toFixed(0)}%</span>
-                </div>
-                {aggressive && (
-                  <div style={{background:G.amberPale,border:`1px solid ${G.amberBorder}`,borderRadius:10,padding:"10px 14px",fontSize:13,color:G.amber}}>
-                    ⚠️ This target is bigger than recent market moves suggest. Possible — but needs a strong rally.
-                  </div>
-                )}
-              </div>
-
-              {/* ── SHARE CARD CTA — RIGHT HERE, IMPOSSIBLE TO MISS ── */}
-              <div ref={shareRef}>
+        {/* results */}
+        {simApi.simState === "done" && mode === "scenario" && simView && selected && market.analysis && (
+          <ResultsView
+            sim={simView} selected={selected} analysis={market.analysis}
+            live={market.live} history={market.history}
+            targetPct={targetPct} months={safeMo}
+            shareRef={shareRef}
+            shareSlot={
+              <Suspense fallback={null}>
                 <SharePanel
-                  selected={selected} sim={sim} targetPct={targetPct}
-                  months={safeMo} freqId={freqId} analysis={analysis} livePrice={livePrice}
+                  selected={selected} sim={simView} targetPct={targetPct} months={safeMo}
+                  freqLabel={freq.label} analysis={market.analysis} livePrice={market.live}
+                  onSavePlan={handleSavePlan} planSaved={planSaved}
+                  onNewPlan={resetAll} onCompareCoin={compareCoin}
                 />
-              </div>
+              </Suspense>
+            }
+          />
+        )}
 
-              {/* BREAKDOWN */}
-              <div style={card}>
-                <div style={secLabel}>Your DCA Breakdown</div>
-                {/* Volatility window info box */}
-                <div style={{background:G.surfaceAlt,borderRadius:10,padding:"10px 14px",marginBottom:14,border:`1px solid ${G.border}`}}>
-                  <div style={{fontSize:12,fontWeight:700,color:G.sub,marginBottom:4}}>How entries were calculated</div>
-                  <div style={{fontSize:13,color:G.muted,lineHeight:1.6}}>
-                    Used the last <strong style={{color:G.text}}>{sim.windowDays} days</strong> of price data ({safeMo} month{safeMo!==1?"s":""}) to model your entry prices.
-                    During that window the price ranged from <strong style={{color:G.text}}>{fmtPrice(sim.simLow)}</strong> to <strong style={{color:G.text}}>{fmtPrice(sim.simHigh)}</strong> (volatility: {sim.volPct.toFixed(1)}%).
-                    That range is scaled to today's live price of <strong style={{color:G.text}}>{fmtPrice(sim.refPrice)}</strong> to simulate realistic future entries.
-                  </div>
-                </div>
-                {[
-                  ["You buy",`${fmtUSD(sim.amtPer)} per purchase`],
-                  ["Number of purchases",`${sim.entries} times`],
-                  ["Total money in",fmtUSD(totalInvested)],
-                  ["Entry price range",`${fmtPrice(sim.simLow)} – ${fmtPrice(sim.simHigh)}`],
-                  ["Avg entry (vol-adjusted)",<span style={{color:sim.avgEntry<=sim.refPrice?G.green:G.amber,fontWeight:700}}>{fmtPrice(sim.avgEntry)} {sim.avgEntry<sim.refPrice?"(below live ↓)":"(above live ↑)"}</span>],
-                  [`Total ${selected.symbol.toUpperCase()} accumulated`,fmtTok(sim.totalTokens)],
-                  ["Value right now",<span style={{color:sim.currentROI>=0?G.green:G.red,fontWeight:700}}>{fmtUSD(sim.currentVal)} ({fmtPct(sim.currentROI)})</span>],
-                ].map(([l,v],i,a)=>(
-                  <div key={l} style={{...statRow,borderBottom:i<a.length-1?`1px solid ${G.border}`:"none"}}>
-                    <span style={{fontSize:14,color:G.muted}}>{l}</span>
-                    <span style={{fontSize:14,fontWeight:700,color:G.text}}>{v}</span>
-                  </div>
-                ))}
-              </div>
+        {simApi.simState === "done" && mode === "backtest" && simApi.backtestResult && selected && (
+          <Suspense fallback={null}>
+            <BacktestView bt={simApi.backtestResult} selected={selected} />
+          </Suspense>
+        )}
 
-              {/* SCENARIOS */}
-              <div style={card}>
-                <div style={secLabel}>What if the price moves differently?</div>
-                <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                  {[
-                    {label:"Price stays flat",plain:`${fmtUSD(totalInvested)} in → ${fmtUSD(sim.flatVal)} back — zero gain`,roi:"±0%",c:G.amber,bg:G.amberPale,b:G.amberBorder},
-                    {label:`Drops 20% → ${fmtPrice(sim.avgEntry*0.8)}`,plain:`${fmtUSD(totalInvested)} in → ${fmtUSD(sim.downVal)} back — down ${fmtUSD(Math.abs(sim.downLoss))}`,roi:"-20%",c:G.red,bg:G.redPale,b:G.redBorder},
-                    {label:`Crashes 50% → ${fmtPrice(sim.avgEntry*0.5)}`,plain:`${fmtUSD(totalInvested)} in → ${fmtUSD(sim.down50Val)} back — down ${fmtUSD(Math.abs(sim.down50Loss))}`,roi:"-50%",c:"#9F1239",bg:"#FFF1F2",b:"#FDA4AF"},
-                  ].map(sc=>(
-                    <div key={sc.label} style={{background:sc.bg,border:`1.5px solid ${sc.b}`,borderRadius:14,padding:"14px 18px"}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                        <div style={{fontSize:13,fontWeight:700,color:sc.c}}>{sc.label}</div>
-                        <span style={{fontWeight:800,fontSize:14,color:sc.c,flexShrink:0,marginLeft:8}}>{sc.roi}</span>
-                      </div>
-                      <div style={{fontSize:14,color:G.text,marginTop:5}}>{sc.plain}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* MARKET SNAPSHOT */}
-              <div style={card}>
-                <div style={secLabel}>Market Snapshot · 120 Days</div>
-                {[
-                  ["Current live price",fmtPrice(sim.refPrice)],
-                  ["30-day average",fmtPrice(analysis.ma30)],
-                  ["90-day average",fmtPrice(analysis.ma90)],
-                  ["Price volatility",`${analysis.volPct.toFixed(1)}%`],
-                  ["120-day momentum",<PctBadge val={analysis.momentum}/>],
-                  ["Trend",<TrendPill trend={analysis.trend}/>],
-                ].map(([l,v],i,a)=>(
-                  <div key={l} style={{...statRow,borderBottom:i<a.length-1?`1px solid ${G.border}`:"none"}}>
-                    <span style={{fontSize:14,color:G.muted}}>{l}</span>
-                    <span style={{fontSize:14,fontWeight:700}}>{v}</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          );
-        })()}
-
-        <div style={{textAlign:"center",fontSize:12,color:G.muted,marginTop:16,paddingBottom:8}}>
-          CMVNG DCA Simulator · Not financial advice · DYOR · Data via CoinGecko
-        </div>
+        <footer style={{ textAlign: "center", fontSize: 12, color: G.muted, marginTop: 16, paddingBottom: 8 }}>
+          CMVNG DCA Simulator · A scenario tool, not financial advice · DYOR · Data via CoinGecko
+        </footer>
       </main>
     </div>
   );

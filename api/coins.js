@@ -1,21 +1,26 @@
 /**
- * CMVNG DCA Simulator — Vercel Proxy
- * File: api/coins.js
+ * CMVNG DCA Simulator — Vercel Edge proxy for CoinGecko.
  *
- * Handles 3 endpoints:
- *   GET /api/coins?type=list            → top 250 coins (cached 12h)
- *   GET /api/coins?type=history&id=XXX  → 120-day price history (cached 12h)
- *   GET /api/coins?type=price&id=XXX    → live price + 24h change (cached 60s)
+ * Endpoints:
+ *   GET /api/coins?type=list            → top 250 coins (edge-cached 12h)
+ *   GET /api/coins?type=history&id=XXX  → 365-day daily price history (edge-cached 12h)
+ *   GET /api/coins?type=price&id=XXX    → live price + 24h change (edge-cached 60s)
+ *   GET /api/coins?type=image&url=XXX   → CORS-safe CoinGecko image proxy (edge-cached 7d)
  *
- * How caching works:
- *   Vercel Edge Cache stores responses using Cache-Control headers.
- *   CoinGecko is only called when the cache expires — not on every request.
- *   1,000 users = still just 1 CoinGecko call per cache window.
+ * Caching: responses carry Cache-Control s-maxage headers; Vercel's edge cache
+ * serves repeats without invoking this function, so CoinGecko is only called
+ * when a cache window expires. (Edge cache HITs never reach this code — every
+ * invocation logged below is effectively a cache MISS.)
+ *
+ * Every JSON payload includes `fetchedAt` (ms epoch, upstream fetch time) so
+ * the client can show honest "Updated X ago" staleness labels even when the
+ * response was served from the edge cache.
  */
 
 const CG = "https://api.coingecko.com/api/v3";
 
-// Stablecoins + wrapped assets to exclude
+// Stablecoins + wrapped/liquid-staked assets excluded from the coin list —
+// DCA-ing into a pegged or wrapper asset is not meaningful.
 const STABLE = new Set([
   "tether","usd-coin","binance-usd","dai","true-usd","frax","usdp","neutrino",
   "gemini-dollar","liquity-usd","fei-usd","usdd","celo-dollar","terraclassicusd",
@@ -35,20 +40,22 @@ const STABLE = new Set([
   "bridged-usdc-polygon-pos-bridge","bridged-usdt",
 ]);
 
-// Helper: fetch from CoinGecko with optional API key
+class UpstreamError extends Error {
+  constructor(status) {
+    super(`CoinGecko error: ${status}`);
+    this.status = status;
+  }
+}
+
 async function cgFetch(path) {
   const apiKey = process.env.COINGECKO_API_KEY;
   const url = `${CG}${path}${apiKey ? (path.includes("?") ? "&" : "?") + "x_cg_demo_api_key=" + apiKey : ""}`;
-  const res = await fetch(url, {
-    headers: { "Accept": "application/json" },
-  });
-  if (!res.ok) throw new Error(`CoinGecko error: ${res.status}`);
+  const res = await fetch(url, { headers: { "Accept": "application/json" } });
+  if (!res.ok) throw new UpstreamError(res.status);
   return res.json();
 }
 
-// Helper: send JSON response with cache headers
-function jsonResponse(data, cacheSeconds, req) {
-  const origin = req.headers.get ? req.headers.get("origin") : (req.headers?.origin || "*");
+function jsonResponse(data, cacheSeconds) {
   return new Response(JSON.stringify(data), {
     status: 200,
     headers: {
@@ -59,19 +66,21 @@ function jsonResponse(data, cacheSeconds, req) {
   });
 }
 
-function errorResponse(message, status = 500) {
+function errorResponse(message, status = 500, extraHeaders = {}) {
   return new Response(JSON.stringify({ error: message }), {
     status,
     headers: {
       "Content-Type": "application/json",
       "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-store",
+      ...extraHeaders,
     },
   });
 }
 
-// ── MAIN HANDLER ──────────────────────────────────────────────────────────────
+const VALID_ID = /^[a-z0-9-]{1,64}$/;
+
 export default async function handler(req) {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -81,47 +90,49 @@ export default async function handler(req) {
 
   const url = new URL(req.url, "https://placeholder.com");
   const type = url.searchParams.get("type");
-  const id   = url.searchParams.get("id");
+  const id = url.searchParams.get("id");
+  const started = Date.now();
 
   try {
-    // ── ENDPOINT 1: Top 250 coins list ────────────────────────────────────────
+    // ── Top 250 coins ────────────────────────────────────────────────────────
     if (type === "list") {
       const [p1, p2, p3] = await Promise.all([
         cgFetch("/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1"),
         cgFetch("/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=2"),
         cgFetch("/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=3"),
       ]);
-      const all = [...p1, ...p2, ...p3]
+      const coins = [...p1, ...p2, ...p3]
         .filter(coin => !STABLE.has(coin.id))
         .slice(0, 250);
-      // Cache for 12 hours — coin list barely changes
-      return jsonResponse(all, 43200, req);
+      logReq(type, started, 200);
+      return jsonResponse({ fetchedAt: Date.now(), coins }, 43200);
     }
 
-    // ── ENDPOINT 2: 120-day price history for a specific coin ─────────────────
+    // ── 365-day daily price history ──────────────────────────────────────────
+    // 365 days supports duration-matched scenario windows AND the rolling-
+    // window robustness analysis + historical backtest mode.
     if (type === "history" && id) {
-      // Validate id — only allow alphanumeric + hyphens to prevent injection
-      if (!/^[a-z0-9-]+$/.test(id)) return errorResponse("Invalid coin id", 400);
-      const data = await cgFetch(`/coins/${id}/market_chart?vs_currency=usd&days=120`);
-      // Cache for 12 hours — historical data doesn't change
-      return jsonResponse(data, 43200, req);
+      if (!VALID_ID.test(id)) return errorResponse("Invalid coin id", 400);
+      // days=365 → CoinGecko auto-granularity returns daily points (no
+      // interval param: it is not available on all API plans).
+      const data = await cgFetch(`/coins/${id}/market_chart?vs_currency=usd&days=365`);
+      logReq(type, started, 200);
+      return jsonResponse({ ...data, fetchedAt: Date.now() }, 43200);
     }
 
-    // ── ENDPOINT 3: Live price for a specific coin ────────────────────────────
+    // ── Live price ───────────────────────────────────────────────────────────
     if (type === "price" && id) {
-      if (!/^[a-z0-9-]+$/.test(id)) return errorResponse("Invalid coin id", 400);
+      if (!VALID_ID.test(id)) return errorResponse("Invalid coin id", 400);
       const data = await cgFetch(`/simple/price?ids=${id}&vs_currencies=usd&include_24hr_change=true`);
-      // Cache for 60 seconds — live price needs to feel fresh
-      return jsonResponse(data, 60, req);
+      logReq(type, started, 200);
+      return jsonResponse({ fetchedAt: Date.now(), data }, 60);
     }
 
-    // ── ENDPOINT 4: Proxy coin image to fix CORS on canvas ──────────────────────
-    // Canvas cannot draw images from external domains (CoinGecko CDN blocks it).
-    // This endpoint fetches the image server-side and re-serves it from your domain.
+    // ── CORS-safe image proxy (canvas needs same-origin images) ──────────────
     if (type === "image") {
       const imgUrl = url.searchParams.get("url");
       if (!imgUrl) return errorResponse("Missing url param", 400);
-      // Only allow CoinGecko image CDN URLs for safety
+      // Strict allow-list: only CoinGecko's image CDNs, https only.
       if (!imgUrl.startsWith("https://assets.coingecko.com/") &&
           !imgUrl.startsWith("https://coin-images.coingecko.com/")) {
         return errorResponse("Only CoinGecko image URLs allowed", 403);
@@ -131,12 +142,13 @@ export default async function handler(req) {
         if (!imgRes.ok) throw new Error("Image fetch failed");
         const blob = await imgRes.arrayBuffer();
         const contentType = imgRes.headers.get("content-type") || "image/png";
+        if (!contentType.startsWith("image/")) return errorResponse("Not an image", 502);
+        logReq(type, started, 200);
         return new Response(blob, {
           status: 200,
           headers: {
             "Content-Type": contentType,
             "Access-Control-Allow-Origin": "*",
-            // Cache images for 7 days — they almost never change
             "Cache-Control": "public, s-maxage=604800, stale-while-revalidate=86400",
           },
         });
@@ -148,12 +160,18 @@ export default async function handler(req) {
     return errorResponse("Unknown endpoint. Use type=list, type=history&id=XXX, type=price&id=XXX, or type=image&url=XXX", 400);
 
   } catch (err) {
-    console.error("Proxy error:", err.message);
-    return errorResponse("Failed to fetch data. CoinGecko may be temporarily unavailable.", 502);
+    const upstream = err instanceof UpstreamError ? err.status : null;
+    logReq(type, started, upstream || 502, err.message);
+    if (upstream === 429) {
+      return errorResponse("Market data provider rate limit reached. Please try again in a minute.", 429, { "Retry-After": "60" });
+    }
+    return errorResponse("Market data is temporarily unavailable. Try again in a moment.", 502);
   }
 }
 
-// Tell Vercel to use Edge Runtime — faster, global, no cold starts
-export const config = {
-  runtime: "edge",
-};
+function logReq(type, started, status, msg = "") {
+  // Every invocation is an edge-cache MISS; latency/status per upstream call.
+  console.log(JSON.stringify({ t: "coins_proxy", type, status, ms: Date.now() - started, msg }));
+}
+
+export const config = { runtime: "edge" };
