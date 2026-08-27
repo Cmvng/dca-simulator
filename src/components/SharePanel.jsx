@@ -1,6 +1,6 @@
 // Share system: 3 card formats × 3 content variants, download, copy shareable
 // plan link, X share. Loaded lazily — canvas code stays out of the initial
-// bundle. INSTRUMENT: paper ground, hairline top rule, no pills, no emoji.
+// bundle. CLEAR BLUE: floating white card, pill chips, one blue action.
 
 import React, { useState } from "react";
 import { T, SANS, inp, section, body, btnPrimary, btnSecondary, btnOption } from "../styles/theme.js";
@@ -74,19 +74,19 @@ export default function SharePanel({ selected, sim, targetPct, months, freqLabel
     } catch { /* user cancelled */ }
   };
 
-  const smallBtn = { ...btnSecondary, flex: 1, minWidth: 110, padding: "10px 12px", fontSize: 13 };
+  const smallBtn = { ...btnSecondary, flex: 1, minWidth: 110, padding: "11px 12px", fontSize: 13 };
   const optBtn = active => ({ ...btnOption(active), flex: 1, minWidth: 104 });
-  const fieldLabel = { fontFamily: SANS, fontSize: 12, fontWeight: 400, color: T.ink2, display: "block", marginBottom: 5 };
+  const fieldLabel = { fontFamily: SANS, fontSize: 12, fontWeight: 600, color: T.ink2, display: "block", marginBottom: 6 };
 
   return (
     <section aria-label="Share your plan" style={{ ...section, marginBottom: 14 }}>
-      <SectionLabel style={{ marginBottom: 4 }}>share your plan</SectionLabel>
-      <div style={{ ...body, marginBottom: 14 }}>
-        A card for X, Instagram or Telegram — plus a link that rebuilds this plan.
+      <SectionLabel eyebrow style={{ marginBottom: 6 }}>Share your plan</SectionLabel>
+      <div style={{ ...body, marginBottom: 16 }}>
+        A friendly card for X, Instagram or Telegram — plus a link that rebuilds this plan.
       </div>
 
       {/* content picker */}
-      <div role="radiogroup" aria-label="Card content" style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+      <div role="radiogroup" aria-label="Card content" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
         {CARD_CONTENTS.map(c => {
           const disabled = c.id === "reality" && !realityOk;
           return (
@@ -101,7 +101,7 @@ export default function SharePanel({ selected, sim, targetPct, months, freqLabel
       </div>
 
       {/* format tabs */}
-      <div role="radiogroup" aria-label="Card format" style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+      <div role="radiogroup" aria-label="Card format" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
         {CARD_FORMATS.map(f => (
           <button key={f.id} role="radio" aria-checked={format === f.id}
             onClick={() => { setFormat(f.id); setCardUrl(null); }}
@@ -111,17 +111,17 @@ export default function SharePanel({ selected, sim, targetPct, months, freqLabel
         ))}
       </div>
 
-      <div style={{ marginBottom: 10 }}>
+      <div style={{ marginBottom: 12 }}>
         <label htmlFor="share-name" style={fieldLabel}>Your name on the card (optional)</label>
         <input id="share-name" type="text" placeholder="e.g. Alex or @alex_dca" maxLength={28} value={userName}
           onChange={e => setUserName(e.target.value)} style={inp} />
       </div>
 
       <label style={{
-        display: "block", padding: "11px 14px", background: T.paper,
-        border: `1px dashed ${T.line}`, borderRadius: 2, cursor: "pointer",
-        fontFamily: SANS, fontSize: 13, fontWeight: 400, color: T.ink2,
-        textAlign: "center", marginBottom: 14,
+        display: "block", padding: "14px 16px", background: T.card2,
+        border: `1px dashed ${T.line}`, borderRadius: 16, cursor: "pointer",
+        fontFamily: SANS, fontSize: 13, fontWeight: 500, color: T.ink2,
+        textAlign: "center", marginBottom: profileImg ? 16 : 6,
       }}>
         {profileImg ? "Photo added — click to swap" : "Add profile photo (optional, never uploaded anywhere)"}
         <input type="file" accept="image/*" onChange={e => {
@@ -129,15 +129,20 @@ export default function SharePanel({ selected, sim, targetPct, months, freqLabel
           const r = new FileReader(); r.onload = ev => setProfileImg(ev.target.result); r.readAsDataURL(f);
         }} style={{ display: "none" }} />
       </label>
+      {!profileImg && (
+        <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 500, color: T.ink3, marginBottom: 16 }}>
+          No photo? Your card will feature the CMVNG mascot.
+        </div>
+      )}
 
       <button onClick={handleCard} disabled={genCard}
-        style={{ ...btnPrimary, opacity: genCard ? 0.55 : 1, cursor: genCard ? "not-allowed" : "pointer", marginBottom: 14 }}>
+        style={{ ...btnPrimary, opacity: genCard ? 0.55 : 1, cursor: genCard ? "not-allowed" : "pointer", marginBottom: 16 }}>
         {genCard ? <>Generating your card <Spinner /></> : "Generate my card"}
       </button>
 
       {cardUrl && (
         <img src={cardUrl} alt={`Share card preview: ${selected.symbol.toUpperCase()} DCA plan`}
-          style={{ width: "100%", maxHeight: 420, objectFit: "contain", border: `1px solid ${T.line}`, marginBottom: 10 }} />
+          style={{ width: "100%", maxHeight: 420, objectFit: "contain", border: `1px solid ${T.line}`, borderRadius: 16, background: T.card2, marginBottom: 12 }} />
       )}
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
@@ -149,7 +154,7 @@ export default function SharePanel({ selected, sim, targetPct, months, freqLabel
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button onClick={onSavePlan} disabled={planSaved}
-          style={{ ...smallBtn, color: planSaved ? T.ink3 : T.ink, cursor: planSaved ? "default" : "pointer" }}>
+          style={{ ...smallBtn, color: planSaved ? T.ink3 : T.blue, cursor: planSaved ? "default" : "pointer" }}>
           {planSaved ? "Plan saved" : "Save this plan"}
         </button>
         {shared && (
@@ -160,7 +165,7 @@ export default function SharePanel({ selected, sim, targetPct, months, freqLabel
         )}
       </div>
 
-      <div style={{ fontFamily: SANS, fontSize: 11, fontWeight: 400, color: T.ink3, marginTop: 12, lineHeight: 1.6 }}>
+      <div style={{ fontFamily: SANS, fontSize: 11, fontWeight: 400, color: T.ink3, marginTop: 14, lineHeight: 1.6 }}>
         The plan link contains only your plan's settings — no name, photo or personal data.
         Your photo never leaves this device. Cards show simulated scenarios, not promised returns.
       </div>

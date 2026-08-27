@@ -1,8 +1,9 @@
 // Assumptions drawer — a pure spec sheet of what the simulation actually
 // assumed on this run. Reads engine-result fields only; computes nothing.
+// CLEAR BLUE: inherits the soft Collapsible card; friendly sentence case.
 
 import React from "react";
-import { body, monoLabel } from "../styles/theme.js";
+import { T, SANS, body } from "../styles/theme.js";
 import { Collapsible, SpecRow } from "./ui.jsx";
 import { MODEL_LABEL } from "../lib/version.js";
 
@@ -30,17 +31,17 @@ export default function AssumptionsDrawer({ sim, mode }) {
   if (hasSeed) rows.push(["Seed", String(sim.seed)]);
 
   return (
-    <Collapsible title="assumptions used in this run">
+    <Collapsible title="Assumptions used in this run" subtitle="what every figure on this page follows from">
       {rows.map(([label, value], i) => (
         <SpecRow key={label} label={label} last={i === rows.length - 1}>{value}</SpecRow>
       ))}
       {hasSeed && (
-        <div style={{ ...monoLabel, marginTop: 6, marginBottom: 0 }}>
-          distribution mode is deterministic under this seed
+        <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 500, color: T.ink3, marginTop: 8 }}>
+          Distribution mode is deterministic under this seed.
         </div>
       )}
       <div style={{ ...body, marginTop: 10 }}>
-        every figure on this page follows from these assumptions — change them under advanced options.
+        Every figure on this page follows from these assumptions — change them under advanced options.
       </div>
     </Collapsible>
   );

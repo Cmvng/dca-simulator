@@ -1,10 +1,10 @@
 // HISTORICAL BACKTEST results — real prices, real dates, clearly labeled as
-// materially different from the scenario simulator. INSTRUMENT sheet:
-// one hero numeral, everything else whispers in hairlines and mono.
+// materially different from the scenario simulator. CLEAR BLUE: one hero
+// numeral with a soft delta badge, everything else in gentle spec rows.
 
 import React from "react";
-import { T, SANS, MONO, HAIRLINE_2, monoLabel, monoFigure, body, plColor } from "../../styles/theme.js";
-import { Section, SpecRow, Numeral, useCountUp } from "../ui.jsx";
+import { T, SANS, monoLabel, monoFigure, body, plColor, pillSoft } from "../../styles/theme.js";
+import { Section, SpecRow, Numeral, useCountUp, DeltaBadge } from "../ui.jsx";
 import { fmtUSD, fmtPrice, fmtTok } from "../../lib/formatting/money.js";
 import { fmtPct } from "../../lib/formatting/percentage.js";
 import { fmtDate } from "../../lib/formatting/dates.js";
@@ -12,6 +12,8 @@ import PortfolioChart from "./PortfolioChart.jsx";
 import BuyBarcode from "./BuyBarcode.jsx";
 import DcaTimeline from "./DcaTimeline.jsx";
 import { DrawdownCard } from "./RiskCards.jsx";
+
+const caption = { fontFamily: SANS, fontSize: 12, fontWeight: 500, color: T.ink3 };
 
 export default function BacktestView({ bt, selected }) {
   // ONE count-up on results reveal — the hero numeral only (hook stays
@@ -31,24 +33,21 @@ export default function BacktestView({ bt, selected }) {
   return (
     <>
       {/* ── THE RESULT — hero numeral ── */}
-      <Section ariaLabel="Historical backtest result" label={`historical backtest · ${selected.symbol.toLowerCase()}`}>
-        <div style={{ ...monoLabel, marginBottom: 14 }}>
-          real {symbol.toLowerCase()} prices · {fmtDate(bt.startDate)} → {fmtDate(bt.endDate)}
+      <Section ariaLabel="Historical backtest result" label={`Historical backtest · ${symbol}`} eyebrow>
+        <div style={{ ...monoLabel, marginBottom: 16 }}>
+          Real {symbol} prices · {fmtDate(bt.startDate)} → {fmtDate(bt.endDate)}
         </div>
-        <Numeral size={60}>{fmtUSD(heroVal)}</Numeral>
-        <div style={{ fontFamily: MONO, fontSize: 13, fontVariantNumeric: "tabular-nums", marginTop: 12, color: T.ink3 }}>
-          <span style={{ color: plColor(profit) }}>{profit >= 0 ? "+" : "−"}{fmtUSD(Math.abs(profit))}</span>
-          {" · "}
-          <span style={{ color: plColor(bt.roiPct) }}>{bt.roiPct >= 0 ? "+" : "−"}{Math.abs(bt.roiPct).toFixed(0)}%</span>
-          {" · what actually happened"}
+        <Numeral size={58}>{fmtUSD(heroVal)}</Numeral>
+        <div style={{ marginTop: 14 }}>
+          <DeltaBadge profit={profit} roiPct={bt.roiPct} suffix="what actually happened" />
         </div>
-        <div style={{ ...body, marginTop: 12 }}>
+        <div style={{ ...body, marginTop: 14 }}>
           Real {symbol} prices — no scaling, no assumptions. Past performance does not determine future results.
         </div>
       </Section>
 
       {/* ── DETAILS ── */}
-      <Section ariaLabel="Backtest details" label="backtest details">
+      <Section ariaLabel="Backtest details" label="Backtest details" eyebrow>
         <SpecRow label="Period">{fmtDate(bt.startDate)} → {fmtDate(bt.endDate)}</SpecRow>
         <SpecRow label="Purchases">{bt.entries} × {fmtUSD(bt.amtPer)}</SpecRow>
         <SpecRow label="Total invested">{fmtUSD(bt.totalInvested)}</SpecRow>
@@ -62,13 +61,13 @@ export default function BacktestView({ bt, selected }) {
       </Section>
 
       {/* ── DCA vs LUMP SUM ── */}
-      <Section ariaLabel="DCA versus lump sum in this period" label="dca vs lump sum · same period, real prices">
-        {strategies.map((s, i) => (
-          <div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "10px 0", borderBottom: i === strategies.length - 1 ? "none" : HAIRLINE_2 }}>
-            <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: s.best ? 500 : 400, color: T.ink }}>
+      <Section ariaLabel="DCA versus lump sum in this period" label="DCA vs lump sum · same period, real prices" eyebrow>
+        {strategies.map(s => (
+          <div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, background: T.card2, borderRadius: 16, padding: "12px 14px", marginBottom: 8 }}>
+            <span style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: s.best ? 700 : 500, color: T.ink, display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               {s.name}
               {s.best && (
-                <span aria-label="ahead in this period" style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.05em", color: T.ink3 }}> · ahead</span>
+                <span aria-label="ahead in this period" style={{ ...pillSoft, fontSize: 11, padding: "3px 10px" }}>ahead</span>
               )}
             </span>
             <span style={{ textAlign: "right" }}>
@@ -78,24 +77,24 @@ export default function BacktestView({ bt, selected }) {
           </div>
         ))}
         <div style={{ ...body, color: T.ink, marginTop: 10 }}>
-          <span style={{ fontWeight: 500 }}>{dcaBeatLump ? "DCA" : "Lump sum"}</span> ends {fmtUSD(Math.abs(bt.endValue - bt.lump.endValue))} ahead.
+          <span style={{ fontWeight: 600 }}>{dcaBeatLump ? "DCA" : "Lump sum"}</span> ends {fmtUSD(Math.abs(bt.endValue - bt.lump.endValue))} ahead.
           <span style={{ color: T.ink3 }}> In this specific period. Neither strategy always wins — it depends on the price path.</span>
         </div>
       </Section>
 
       {/* ── ENTRIES ── */}
-      <Section ariaLabel="Backtest chart" label="price path · actual prices">
+      <Section ariaLabel="Backtest chart" label="Price path · actual prices" eyebrow>
         <PortfolioChart series={bt.series} avgEntry={bt.avgEntry} mode="backtest" />
         <div style={{ marginTop: 10 }}>
           <BuyBarcode entries={bt.entries} madeCount={bt.entries} currentIndex={null} />
-          <div style={{ ...monoLabel, marginTop: 6, marginBottom: 0 }}>
-            one tick per executed buy — all {bt.entries} were made in this period
+          <div style={{ ...caption, marginTop: 6 }}>
+            One tick per executed buy — all {bt.entries} were made in this period.
           </div>
         </div>
       </Section>
 
       {/* ── RISK ── */}
-      <Section ariaLabel="Backtest risk" label="risk in this period">
+      <Section ariaLabel="Backtest risk" label="Risk in this period" eyebrow>
         <DrawdownCard drawdown={bt.drawdown} mode="backtest" />
       </Section>
 
