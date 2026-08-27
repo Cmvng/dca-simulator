@@ -1,8 +1,8 @@
 // Real-time plan preview — updates instantly, before any simulation runs.
-// A mini spec sheet: mono whisper label over one line of mono figures.
+// A soft inset: eyebrow label over one friendly line of tabular figures.
 
 import React from "react";
-import { HAIRLINE, body, monoFigure } from "../styles/theme.js";
+import { T, body, monoFigure, pillSoft } from "../styles/theme.js";
 import { SectionLabel } from "./ui.jsx";
 import { buildSchedule, validateCapital } from "../lib/simulation/dca.js";
 import { fmtUSD, fmtUSDPrecise } from "../lib/formatting/money.js";
@@ -21,13 +21,13 @@ export default function SchedulePreview({ selected, capital, freqId, months, tar
   ].filter(Boolean);
 
   return (
-    <div aria-live="polite" style={{ borderTop: HAIRLINE, marginTop: 16, paddingTop: 14 }}>
-      <SectionLabel style={{ marginBottom: 8 }}>your plan</SectionLabel>
+    <div aria-live="polite" style={{ marginTop: 16, background: T.card2, borderRadius: 16, padding: "14px 16px" }}>
+      <SectionLabel eyebrow style={{ marginBottom: 8 }}>Your plan</SectionLabel>
       <div style={monoFigure}>{items.join(" · ")}</div>
-      <div style={{ ...body, marginTop: 6 }}>
+      <div style={{ ...body, marginTop: 8 }}>
         {mode === "backtest"
           ? "Mode: historical backtest — real past prices, real dates."
-          : <>Target scenario: <span style={monoFigure}>+{targetPct}%</span> (your chosen test case, not a forecast)</>}
+          : <>Target scenario: <span style={{ ...pillSoft, fontVariantNumeric: "tabular-nums" }}>+{targetPct}%</span> (your chosen test case, not a forecast)</>}
       </div>
     </div>
   );

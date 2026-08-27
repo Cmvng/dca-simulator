@@ -2,7 +2,7 @@
 // to test?", never as a forecast. Supports a custom value.
 
 import React, { useState } from "react";
-import { T, MONO, inp, body, btnOption } from "../styles/theme.js";
+import { T, SANS, inp, body, btnOption } from "../styles/theme.js";
 import { track } from "../lib/analytics.js";
 
 const TARGETS = [10, 25, 50, 100, 200];
@@ -23,13 +23,13 @@ export default function TargetSelector({ targetPct, onChange }) {
 
   return (
     <div>
-      <span style={{ ...body, color: T.ink, display: "block", marginBottom: 4 }}>
+      <span style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: T.ink, display: "block", marginBottom: 4 }}>
         Target scenario — what outcome do you want to test?
       </span>
-      <div style={{ ...body, fontSize: 12, marginBottom: 8 }}>
+      <div style={{ ...body, fontSize: 12, marginBottom: 10 }}>
         This is a scenario you choose, not a prediction the app makes.
       </div>
-      <div role="radiogroup" aria-label="Target scenario" style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+      <div role="radiogroup" aria-label="Target scenario" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {TARGETS.map(t => (
           <button key={t} role="radio" aria-checked={targetPct === t && !customOpen}
             onClick={() => { onChange(t); setCustomOpen(false); track("target_selected", { target: t }); }}
@@ -44,12 +44,12 @@ export default function TargetSelector({ targetPct, onChange }) {
         </button>
       </div>
       {customOpen && (
-        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
-          <label htmlFor="custom-target" style={{ fontFamily: MONO, fontSize: 13, color: T.ink2 }}>+</label>
+        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
+          <label htmlFor="custom-target" style={{ fontFamily: SANS, fontSize: 14, fontWeight: 600, color: T.ink2 }}>+</label>
           <input id="custom-target" type="text" inputMode="numeric" value={customVal}
             onChange={e => commitCustom(e.target.value)}
             placeholder="e.g. 75" aria-label="Custom target percent (1 to 1000)"
-            style={{ ...inp, maxWidth: 120, padding: "8px 12px" }} />
+            style={{ ...inp, maxWidth: 120, padding: "9px 12px" }} />
           <span style={{ ...body }}>% (1–1000)</span>
         </div>
       )}

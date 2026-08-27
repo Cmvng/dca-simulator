@@ -3,7 +3,7 @@
 // data-quality notes.
 
 import React, { useMemo, useState } from "react";
-import { T, SANS, MONO, HAIRLINE, HAIRLINE_2, inp, body, monoLabel, monoFigure, btnOption } from "../styles/theme.js";
+import { T, SANS, CARD_SHADOW, inp, body, monoLabel, eyebrow, monoFigure, btnOption } from "../styles/theme.js";
 import { CoinImg, TrendPill, Staleness, SignedPct } from "./ui.jsx";
 import { InlineLoading } from "./LoadingState.jsx";
 import { fmtPrice } from "../lib/formatting/money.js";
@@ -15,16 +15,15 @@ const FILTERS = [
   { id: "top50", label: "Top 50", test: c => c.market_cap_rank <= 50 },
   { id: "top100", label: "Top 100", test: c => c.market_cap_rank <= 100 },
   { id: "trending", label: "Trending (24h movers)", test: null }, // special: sorted by |24h|
-  { id: "largecap", label: "Large Cap", test: c => (c.market_cap || 0) >= 10e9 },
-  { id: "highvol", label: "High Volatility", test: c => Math.abs(c.price_change_percentage_24h || 0) >= 5 },
+  { id: "largecap", label: "Large cap", test: c => (c.market_cap || 0) >= 10e9 },
+  { id: "highvol", label: "High volatility", test: c => Math.abs(c.price_change_percentage_24h || 0) >= 5 },
 ];
 
 const QUICK_PICKS = ["btc", "eth", "sol", "xrp"];
 
-// small square hairline button — mono lowercase label
-const monoBtn = active => ({
-  ...btnOption(active), padding: "5px 9px",
-  fontFamily: MONO, fontSize: 11, letterSpacing: "0.05em", textTransform: "lowercase",
+// small pill chip — friendly, fully rounded
+const chip = active => ({
+  ...btnOption(active), padding: "7px 12px", fontSize: 12,
 });
 
 export default function CoinSelector({ coins, selected, onSelect, market }) {
@@ -86,22 +85,22 @@ export default function CoinSelector({ coins, selected, onSelect, market }) {
     <div>
       {/* quick picks */}
       {!selected && quickCoins.length > 0 && (
-        <div role="group" aria-label="Quick picks" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
-          <span style={{ ...monoLabel }}>quick picks</span>
+        <div role="group" aria-label="Quick picks" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+          <span style={monoLabel}>Quick picks</span>
           {quickCoins.map(c => (
-            <button key={c.id} onClick={() => selectCoin(c)} style={monoBtn(false)}>
-              {c.symbol.toLowerCase()}
+            <button key={c.id} onClick={() => selectCoin(c)} style={chip(false)}>
+              {c.symbol.toUpperCase()}
             </button>
           ))}
         </div>
       )}
 
       {/* quick filters */}
-      <div role="group" aria-label="Quick filters" style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+      <div role="group" aria-label="Quick filters" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
         {FILTERS.map(f => (
           <button key={f.id} onClick={() => { setFilter(f.id); setDropOpen(true); }}
             aria-pressed={filter === f.id}
-            style={monoBtn(filter === f.id)}>
+            style={chip(filter === f.id)}>
             {f.label}
           </button>
         ))}
@@ -117,18 +116,18 @@ export default function CoinSelector({ coins, selected, onSelect, market }) {
           value={selected ? `${selected.name} (${selected.symbol.toUpperCase()})` : search}
           onChange={e => { setSearch(e.target.value); if (selected) onSelect(null); setDropOpen(true); setActiveIdx(-1); }}
           onKeyDown={onKeyDown}
-          onFocus={e => { e.target.style.borderColor = T.ink; setDropOpen(true); }}
+          onFocus={e => { e.target.style.borderColor = T.blue; setDropOpen(true); }}
           onBlur={e => { e.target.style.borderColor = T.line; setTimeout(() => setDropOpen(false), 180); }}
           placeholder="Search by name or ticker… (250 coins)"
         />
         {selected && (
-          <div style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)" }}>
+          <div style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }}>
             <CoinImg src={selected.image} symbol={selected.symbol} size={24} />
           </div>
         )}
 
         {dropOpen && !selected && (
-          <div id="coin-listbox" role="listbox" style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, zIndex: 200, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 2, maxHeight: 300, overflowY: "auto" }}>
+          <div id="coin-listbox" role="listbox" style={{ position: "absolute", top: "calc(100% + 8px)", left: 0, right: 0, zIndex: 200, background: T.card, border: `1px solid ${T.line}`, borderRadius: 16, boxShadow: CARD_SHADOW, maxHeight: 300, overflowY: "auto" }}>
             {visible.length === 0 && (
               <div style={{ ...body, padding: "16px 14px" }}>No coins match — try another name or ticker.</div>
             )}
@@ -136,16 +135,16 @@ export default function CoinSelector({ coins, selected, onSelect, market }) {
               <div key={a.id} id={`coin-opt-${idx}`} role="option" aria-selected={idx === activeIdx} tabIndex={-1}
                 onMouseDown={() => selectCoin(a)}
                 onMouseEnter={() => setActiveIdx(idx)}
-                style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", cursor: "pointer", borderBottom: idx < visible.length - 1 ? HAIRLINE_2 : "none", background: idx === activeIdx ? T.paper2 : "transparent" }}
+                style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", cursor: "pointer", background: idx === activeIdx ? T.card2 : "transparent" }}
               >
                 <CoinImg src={a.image} symbol={a.symbol} size={30} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 500, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.name}</div>
-                  <div style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.05em", color: T.ink3 }}>{a.symbol.toUpperCase()} · #{a.market_cap_rank}</div>
+                  <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 600, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.name}</div>
+                  <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 500, color: T.ink3 }}>{a.symbol.toUpperCase()} · #{a.market_cap_rank}</div>
                 </div>
                 <div style={{ textAlign: "right", flexShrink: 0 }}>
                   <div style={monoFigure}>{fmtPrice(a.current_price)}</div>
-                  <div style={{ fontSize: 11 }}><SignedPct val={a.price_change_percentage_24h || 0} /></div>
+                  <div style={{ fontSize: 12 }}><SignedPct val={a.price_change_percentage_24h || 0} /></div>
                 </div>
               </div>
             ))}
@@ -154,22 +153,22 @@ export default function CoinSelector({ coins, selected, onSelect, market }) {
       </div>
 
       {selected && (
-        <div style={{ marginTop: 14, borderTop: HAIRLINE, paddingTop: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ marginTop: 14, background: T.card2, borderRadius: 16, padding: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <CoinImg src={selected.image} symbol={selected.symbol} size={36} />
             <div style={{ flex: 1, minWidth: 140 }}>
-              <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 500, color: T.ink }}>
-                {selected.name} <span style={{ ...monoLabel, textTransform: "none" }}>#{selected.market_cap_rank}</span>
+              <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>
+                {selected.name} <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 500, color: T.ink3 }}>#{selected.market_cap_rank}</span>
               </div>
               {loadingLive && !live
                 ? <InlineLoading label="Getting live price…" />
                 : live
                   ? <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 2, flexWrap: "wrap" }}>
-                      <span style={{ fontFamily: SANS, fontSize: 20, fontWeight: 500, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmtPrice(live.price)}</span>
+                      <span style={{ fontFamily: SANS, fontSize: 21, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: T.ink }}>{fmtPrice(live.price)}</span>
                       <SignedPct val={live.change24h} />
                       <Staleness fetchedAt={live.fetchedAt} stale={live.stale} />
                     </div>
-                  : <div style={{ ...monoFigure, fontSize: 14 }}>{fmtPrice(selected.current_price)}</div>
+                  : <div style={monoFigure}>{fmtPrice(selected.current_price)}</div>
               }
             </div>
             {analysis && <TrendPill trend={analysis.trend} />}
@@ -180,7 +179,7 @@ export default function CoinSelector({ coins, selected, onSelect, market }) {
 
           {/* data-quality notes — informative, not blocking */}
           {(limitedHistory || (analysis && analysis.volPct > 8) || history?.issues?.length > 0) && (
-            <div style={{ marginTop: 8 }}>
+            <div style={{ marginTop: 10 }}>
               {limitedHistory && <Note>Limited history ({historyDays} days)</Note>}
               {analysis && analysis.volPct > 8 && <Note>High-volatility asset — expect large swings</Note>}
               {history?.issues?.length > 0 && <Note>Some price data was cleaned before use</Note>}
@@ -188,12 +187,12 @@ export default function CoinSelector({ coins, selected, onSelect, market }) {
           )}
 
           {analysis && (
-            <div style={{ marginTop: 12, borderTop: HAIRLINE, paddingTop: 10 }}>
-              <div style={{ ...monoLabel, marginBottom: 4 }}>
+            <div style={{ marginTop: 12, background: T.card, borderRadius: 14, padding: "12px 14px" }}>
+              <div style={{ ...eyebrow, marginBottom: 5 }}>
                 cmvng model score {analysis.score >= 0 ? "+" : ""}{analysis.score} (heuristic)
               </div>
               <div>
-                <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 500, color: T.ink }}>{sentenceCase(analysis.verdict)}</span>
+                <span style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: T.ink }}>{sentenceCase(analysis.verdict)}</span>
                 <span style={body}> — {verdictDesc(analysis.score)}</span>
               </div>
             </div>
@@ -205,7 +204,7 @@ export default function CoinSelector({ coins, selected, onSelect, market }) {
 }
 
 function Note({ children }) {
-  return <div style={{ ...monoLabel, marginTop: 2 }}>note: {children}</div>;
+  return <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 500, color: T.ink3, marginTop: 2 }}>Note: {children}</div>;
 }
 
 const sentenceCase = s => s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
