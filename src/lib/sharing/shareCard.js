@@ -228,14 +228,15 @@ function drawFooter({ ctx, W, H, format }, g) {
   // shrink until both ends fit with breathing room — measureText decides
   let fs = g.footFs;
   ctx.font = sans(fs, 500);
-  const rightW = () => { ctx.font = sans(fs, 700); return ctx.measureText("cmvng.app").width; };
+  // Live deployment URL until the custom domain is set (owner request)
+  const rightW = () => { ctx.font = sans(fs, 700); return ctx.measureText("web-production-84b5c.up.railway.app").width; };
   const leftW = () => { ctx.font = sans(fs, 500); return ctx.measureText(left).width; };
   while (fs > 10 && leftW() + rightW() + 32 > x1 - x0) fs -= 1;
   ctx.textBaseline = "alphabetic";
   ctx.font = sans(fs, 500); ctx.fillStyle = T.ink3; ctx.textAlign = "left";
   ctx.fillText(left, x0, cardBottom - g.footBase);
   ctx.font = sans(fs, 700); ctx.fillStyle = T.blue; ctx.textAlign = "right";
-  ctx.fillText("cmvng.app", x1, cardBottom - g.footBase);
+  ctx.fillText("web-production-84b5c.up.railway.app", x1, cardBottom - g.footBase);
   ctx.textAlign = "left";
   if (format === "story" && g.cta) {
     ctx.font = sans(g.ctaFs, 700); ctx.fillStyle = T.blue; ctx.textAlign = "center";
