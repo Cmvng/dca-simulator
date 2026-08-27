@@ -1,25 +1,26 @@
 import React from "react";
-import { G } from "../styles/theme.js";
+import { T, monoLabel } from "../styles/theme.js";
 
-// Progress-bar loading line.
+// Progress-bar loading line — mono whisper label over a 2px hairline track.
+// The width transition is functional (progress), not decorative.
 export function ProgressLoading({ label, progress }) {
   return (
     <div role="status" aria-live="polite">
-      <div style={{ fontSize: 13, color: G.muted, marginBottom: 8 }}>{label}</div>
-      <div style={{ height: 4, background: G.border, borderRadius: 4, overflow: "hidden" }}>
-        <div style={{ height: "100%", background: G.green, borderRadius: 4, width: `${progress}%`, transition: "width 0.4s ease" }} />
+      <div style={{ ...monoLabel, marginBottom: 8 }}>{label}</div>
+      <div style={{ height: 2, background: T.line2 }}>
+        <div style={{ height: "100%", background: T.ink, width: `${progress}%`, transition: "width 0.4s ease" }} />
       </div>
     </div>
   );
 }
 
-// Skeleton block for cards that are still loading.
+// Static placeholder block for content that is still loading. No shimmer.
 export function Skeleton({ height = 60, style = {} }) {
   return (
-    <div aria-hidden="true" style={{ height, borderRadius: 10, background: `linear-gradient(90deg, ${G.surfaceAlt}, ${G.border}, ${G.surfaceAlt})`, backgroundSize: "200% 100%", animation: "pulse 1.4s ease infinite", ...style }} />
+    <div aria-hidden="true" style={{ height, borderRadius: 2, background: T.paper2, ...style }} />
   );
 }
 
 export function InlineLoading({ label }) {
-  return <div role="status" aria-live="polite" style={{ fontSize: 12, color: G.muted }}>{label}</div>;
+  return <div role="status" aria-live="polite" style={{ ...monoLabel }}>{label}</div>;
 }

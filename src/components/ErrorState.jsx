@@ -1,13 +1,14 @@
 import React from "react";
-import { G } from "../styles/theme.js";
+import { T, HAIRLINE, body, btnSecondary } from "../styles/theme.js";
 
 // Human-readable error with retry. Never shows raw stack traces.
+// Hairline top + bottom borders only — no colored fill.
 export default function ErrorState({ message, onRetry, compact = false }) {
   return (
-    <div role="alert" style={{ background: G.redPale, border: `1px solid ${G.redBorder}`, borderRadius: 12, padding: compact ? "10px 14px" : "16px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-      <span style={{ fontSize: 14, color: G.red, fontWeight: 600 }}>{message}</span>
+    <div role="alert" style={{ background: T.paper, borderTop: HAIRLINE, borderBottom: HAIRLINE, padding: compact ? "10px 0" : "16px 0", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+      <span style={{ ...body, color: T.loss }}>{message}</span>
       {onRetry && (
-        <button onClick={onRetry} style={{ background: "#fff", color: G.red, border: `1.5px solid ${G.redBorder}`, borderRadius: 10, padding: "7px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+        <button onClick={onRetry} style={{ ...btnSecondary, padding: "8px 14px", fontSize: 13 }}>
           Try again
         </button>
       )}
