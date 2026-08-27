@@ -1,13 +1,15 @@
-// Share-card renderer — canvas PNGs in three formats:
-//   x        1200×675  (X/Twitter feed, v1-preserved layout)
+// Share-card renderer — canvas PNGs in three formats, INSTRUMENT language:
+//   x        1200×675  (X/Twitter feed)
 //   square   1080×1080 (Instagram/Telegram)
 //   story    1080×1920 (vertical story)
-// All formats carry CMVNG branding, plan, headline result, scenarios and the
-// "Not financial advice" footer. Nothing implies guaranteed returns.
+// --paper ground, hairline rules, one giant --ink numeral, mono technical
+// footer. No gradients, no shadows, no pills, no emoji. Three content
+// variants: "plan" (default), "reality", "comparison" — each only
+// re-presents numbers already computed by the simulation engine.
 
+import { T } from "../../styles/theme.js";
 import { imageProxyUrl } from "../../services/api.js";
 import { fmtUSD, fmtPrice } from "../formatting/money.js";
-import { fmtPct } from "../formatting/percentage.js";
 import { MODEL_LABEL } from "../version.js";
 
 export const CARD_FORMATS = [
@@ -16,10 +18,32 @@ export const CARD_FORMATS = [
   { id: "story", label: "Story · 1080×1920", w: 1080, h: 1920 },
 ];
 
-function rr(ctx, x, y, w, h, r) {
-  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
-  ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r); ctx.lineTo(x + r, y + h);
-  ctx.arcTo(x, y + h, x, y + h - r, r); ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r); ctx.closePath();
+export const CARD_CONTENTS = [
+  { id: "plan", label: "My plan" },
+  { id: "reality", label: "Reality check" },
+  { id: "comparison", label: "DCA vs lump sum" },
+];
+
+// Canvas font stacks — two weights only (400/500), per DESIGN.md.
+const SANS = "Inter, Arial, sans-serif";
+const MONO = "Menlo, Consolas, monospace";
+const sans = (px, w = 400) => `${w} ${px}px ${SANS}`;
+const mono = px => `400 ${px}px ${MONO}`;
+
+// signed figure helpers (U+2212 minus, never a hyphen)
+const sPct = (v, d = 0) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(d)}%`;
+const sUSD = v => `${v >= 0 ? "+" : "−"}${fmtUSD(Math.abs(v))}`;
+
+const setLS = (ctx, v) => { ctx.letterSpacing = v; };
+
+// Shrink a font size until `text` fits `maxW` — measureText drives layout.
+function fitSize(ctx, text, maxPx, maxW, weight = 500, family = SANS) {
+  let s = maxPx;
+  for (;;) {
+    ctx.font = `${weight} ${s}px ${family}`;
+    if (ctx.measureText(text).width <= maxW || s <= 12) return s;
+    s = Math.floor(s * 0.94);
+  }
 }
 
 function loadImg(src) {
@@ -33,7 +57,7 @@ function loadImg(src) {
   });
 }
 
-function circleImage(ctx, img, cx, cy, r, bg = "#15803D") {
+function circleImage(ctx, img, cx, cy, r, bg = T.paper2) {
   ctx.fillStyle = bg;
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
   if (img) {
@@ -44,315 +68,352 @@ function circleImage(ctx, img, cx, cy, r, bg = "#15803D") {
   }
 }
 
-function scenarioBoxes(sim) {
-  return [
-    { label: "Price stays flat", val: sim.units * sim.refPrice, change: "±0%", note: "At live price", c: "#B45309", bg: "#FFFBEB", brd: "#FDE68A" },
-    { label: "Drops 20%", val: sim.downVal, change: "-20%", note: `−${fmtUSD(Math.abs(sim.downLoss))}`, c: "#DC2626", bg: "#FEF2F2", brd: "#FECACA" },
-    { label: "Crashes 50%", val: sim.down50Val, change: "-50%", note: `−${fmtUSD(Math.abs(sim.down50Loss))}`, c: "#9F1239", bg: "#FFF1F2", brd: "#FDA4AF" },
-  ];
+function hairline(ctx, x1, y1, x2, y2, color = T.line) {
+  ctx.strokeStyle = color; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
 }
 
-function drawScenarioRow(ctx, sim, x, y, w, h, dark) {
-  const colW = w / 3;
-  scenarioBoxes(sim).forEach((sc, i) => {
-    const sx = x + i * colW, sw = colW - 10;
-    rr(ctx, sx, y, sw, h, 10); ctx.fillStyle = sc.bg; ctx.fill();
-    ctx.strokeStyle = sc.brd; ctx.lineWidth = 1.5; ctx.stroke();
-    ctx.fillStyle = sc.c; ctx.font = "bold 20px Arial"; ctx.textAlign = "left";
-    ctx.fillText(sc.label, sx + 14, y + 30);
-    ctx.fillStyle = dark; ctx.font = "bold 34px Arial";
-    ctx.fillText(fmtUSD(sc.val), sx + 14, y + 74);
-    ctx.fillStyle = sc.c; ctx.font = "bold 20px Arial";
-    ctx.fillText(sc.change, sx + 14, y + 106);
-    ctx.fillStyle = "#6B7280"; ctx.font = "17px Arial";
-    ctx.fillText(sc.note, sx + 14, y + 132);
-  });
-}
-
-export async function makeCard({ format = "x", asset, sim, targetPct, months, freqLabel, userName, profileImg, analysis, livePrice }) {
+// ── Entry point ──────────────────────────────────────────────────────────────
+export async function makeCard({ format = "x", content = "plan", asset, sim, targetPct, months, freqLabel, userName, profileImg, analysis, livePrice }) {
   const fmt = CARD_FORMATS.find(f => f.id === format) || CARD_FORMATS[0];
   const cv = document.createElement("canvas");
   cv.width = fmt.w; cv.height = fmt.h;
   const ctx = cv.getContext("2d");
-  const args = { ctx, W: fmt.w, H: fmt.h, asset, sim, targetPct, months, freqLabel, userName, profileImg, analysis, livePrice };
-  if (format === "square") await drawSquare(args);
-  else if (format === "story") await drawStory(args);
-  else await drawLandscape(args);
+
+  // "reality" needs sim.reality — fall back to the plan card without it
+  let kind = content;
+  if (kind === "reality" && !sim.reality?.ok) kind = "plan";
+  if (kind === "comparison" && !sim.comparison?.length) kind = "plan";
+
+  const o = { ctx, W: fmt.w, H: fmt.h, format, asset, sim, targetPct, months, freqLabel, userName, profileImg, analysis, livePrice };
+
+  // ground — paper, nothing else
+  ctx.fillStyle = T.paper;
+  ctx.fillRect(0, 0, fmt.w, fmt.h);
+
+  const g = GEOM[fmt.id];
+  const top = await drawHeader(o, g);
+  const bottom = drawFooter(o, g);
+  const region = { x: g.pad, y: top, w: fmt.w - g.pad * 2, bottom };
+
+  if (kind === "reality") drawReality(o, g, region);
+  else if (kind === "comparison") drawComparison(o, g, region);
+  else drawPlan(o, g, region);
+
   return cv.toDataURL("image/png");
 }
 
-// ── X landscape — v1-preserved layout ────────────────────────────────────────
-async function drawLandscape({ ctx, W, H, asset, sim, targetPct, months, freqLabel, userName, profileImg, analysis, livePrice }) {
-  const G_dark = "#052E16";
-  const totalInvested = sim.totalInvested;
-  const LP = Math.round(W * 0.36);
-  const RX = LP + 1, RW = W - LP, PAD = 38;
+// Per-format geometry — sizes only, the drawing code is shared.
+const GEOM = {
+  x: {
+    pad: 48, headerCy: 78, headerBottom: 136, coinR: 28, pfpR: 34,
+    wordFs: 28, headMono: 15, nameFs: 20, priceFs: 15,
+    capFs: 19, heroFs: 132, subFs: 22, planFs: 18,
+    rulerFs: 15, rulerR: 7, rulerLabelY: 448, rulerY: 462,
+    specFs: 17, rowH: 44, valFs: 50, cmpRowH: 110,
+    footFs: 14, footBase: 26, footLine: 58, cta: false,
+  },
+  square: {
+    pad: 64, headerCy: 106, headerBottom: 180, coinR: 32, pfpR: 40,
+    wordFs: 34, headMono: 17, nameFs: 24, priceFs: 18,
+    capFs: 23, heroFs: 160, subFs: 27, planFs: 22,
+    rulerFs: 19, rulerR: 9, rulerLabelY: 660, rulerY: 682,
+    specFs: 21, rowH: 56, valFs: 64, cmpRowH: 150,
+    footFs: 16, footBase: 34, footLine: 72, cta: false,
+  },
+  story: {
+    pad: 64, headerCy: 112, headerBottom: 192, coinR: 34, pfpR: 40,
+    wordFs: 36, headMono: 18, nameFs: 25, priceFs: 19,
+    capFs: 25, heroFs: 176, subFs: 29, planFs: 24,
+    rulerFs: 22, rulerR: 11, rulerLabelY: 806, rulerY: 830,
+    specFs: 23, rowH: 62, valFs: 76, cmpRowH: 190,
+    footFs: 17, footBase: 40, footLine: 92, cta: true, ctaFs: 28, ctaBase: 150,
+  },
+};
 
-  ctx.fillStyle = "#F0FDF4"; ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = "#16A34A"; ctx.fillRect(0, 0, LP, H);
-  ctx.fillStyle = "rgba(255,255,255,0.05)"; ctx.beginPath(); ctx.arc(LP * 0.1, H * 0.9, 220, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = "rgba(255,255,255,0.04)"; ctx.beginPath(); ctx.arc(LP * 0.9, -20, 180, 0, Math.PI * 2); ctx.fill();
+// ── Header — identity data, kept subtle, never a hero ────────────────────────
+async function drawHeader({ ctx, W, asset, livePrice, userName, profileImg }, g) {
+  const cy = g.headerCy;
+  const base = cy + g.wordFs * 0.36;
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
 
-  ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.font = "bold 24px Arial"; ctx.textAlign = "left";
-  ctx.fillText("CMVNG", 24, 40);
-  ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.font = "13px Arial";
-  ctx.fillText("DCA Simulator", 24, 58);
+  // wordmark: "cmvng" in ink, the period in blue (the logo dot)
+  ctx.font = sans(g.wordFs, 500); ctx.fillStyle = T.ink;
+  ctx.fillText("cmvng", g.pad, base);
+  const w1 = ctx.measureText("cmvng").width;
+  ctx.fillStyle = T.blue; ctx.fillText(".", g.pad + w1, base);
+  const w2 = w1 + ctx.measureText(".").width;
+  ctx.font = mono(g.headMono); ctx.fillStyle = T.ink3; setLS(ctx, "0.8px");
+  ctx.fillText("dca simulator", g.pad + w2 + 16, base);
+  setLS(ctx, "0px");
 
+  // coin identity, right-aligned: name / ticker · live price (mono)
   const liveP = livePrice?.price || asset.current_price;
-  const panelCX = LP / 2;
+  const nameTxt = asset.name;
+  const priceTxt = `${asset.symbol.toLowerCase()} · ${fmtPrice(liveP)}`;
+  ctx.font = sans(g.nameFs, 500);
+  const nw = ctx.measureText(nameTxt).width;
+  ctx.font = mono(g.priceFs);
+  const pw = ctx.measureText(priceTxt).width;
+  const tw = Math.max(nw, pw);
+  ctx.textAlign = "right";
+  ctx.font = sans(g.nameFs, 500); ctx.fillStyle = T.ink;
+  ctx.fillText(nameTxt, W - g.pad, cy - 5);
+  ctx.font = mono(g.priceFs); ctx.fillStyle = T.ink2;
+  ctx.fillText(priceTxt, W - g.pad, cy + g.priceFs + 7);
 
+  const logoCx = W - g.pad - tw - 18 - g.coinR;
+  const logo = asset.image ? await loadImg(asset.image) : null;
+  circleImage(ctx, logo, logoCx, cy, g.coinR);
+  if (!logo) {
+    ctx.font = mono(Math.round(g.coinR * 0.62)); ctx.fillStyle = T.ink2; ctx.textAlign = "center";
+    ctx.fillText(asset.symbol.slice(0, 2).toLowerCase(), logoCx, cy + g.coinR * 0.22);
+  }
+  ctx.strokeStyle = T.line; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(logoCx, cy, g.coinR, 0, Math.PI * 2); ctx.stroke();
+
+  // optional PFP + name, further left — small, subtle
+  let leftEdge = logoCx - g.coinR;
   if (profileImg) {
-    const PFP_R = 80, PFP_Y = H * 0.30;
     const pimg = await loadImg(profileImg);
-    ctx.fillStyle = "rgba(255,255,255,0.15)";
-    ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R + 10, 0, Math.PI * 2); ctx.fill();
-    circleImage(ctx, pimg, panelCX, PFP_Y, PFP_R);
-    ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R + 2, 0, Math.PI * 2); ctx.stroke();
-    ctx.strokeStyle = "#4ADE80"; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(panelCX, PFP_Y, PFP_R + 6, 0, Math.PI * 2); ctx.stroke();
-    if (userName) {
-      ctx.fillStyle = "#FFFFFF"; ctx.font = "bold 20px Arial"; ctx.textAlign = "center";
-      ctx.fillText(userName, panelCX, PFP_Y + PFP_R + 26);
-      ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.font = "13px Arial";
-      ctx.fillText("DCA Strategy", panelCX, PFP_Y + PFP_R + 44);
-    }
-    const TL_Y = H * 0.68, TL_R2 = 38;
-    const logo = asset.image ? await loadImg(asset.image) : null;
-    circleImage(ctx, logo, panelCX, TL_Y, TL_R2, "rgba(255,255,255,0.95)");
-    ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R2 + 3, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = "#FFFFFF"; ctx.font = "bold 36px Arial"; ctx.textAlign = "center";
-    ctx.fillText(asset.symbol.toUpperCase(), panelCX, TL_Y + 60);
-    ctx.fillStyle = "rgba(255,255,255,0.55)"; ctx.font = "14px Arial";
-    ctx.fillText(asset.name, panelCX, TL_Y + 80);
-    ctx.fillStyle = "#FFFFFF"; ctx.font = "bold 22px Arial";
-    ctx.fillText(fmtPrice(liveP), panelCX, TL_Y + 108);
-  } else {
-    const TL_Y = H * 0.38, TL_R = 70;
-    const logo = asset.image ? await loadImg(asset.image) : null;
-    circleImage(ctx, logo, panelCX, TL_Y, TL_R, "rgba(255,255,255,0.95)");
-    ctx.strokeStyle = "rgba(255,255,255,0.6)"; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(panelCX, TL_Y, TL_R + 4, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = "#FFFFFF"; ctx.font = "bold 56px Arial"; ctx.textAlign = "center";
-    ctx.fillText(asset.symbol.toUpperCase(), panelCX, TL_Y + TL_R + 58);
-    ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.font = "17px Arial";
-    ctx.fillText(asset.name, panelCX, TL_Y + TL_R + 82);
-    ctx.fillStyle = "#FFFFFF"; ctx.font = "bold 26px Arial";
-    ctx.fillText(fmtPrice(liveP), panelCX, TL_Y + TL_R + 118);
-    if (userName) {
-      ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.font = "bold 15px Arial";
-      ctx.fillText(userName, panelCX, TL_Y + TL_R + 144);
-    }
+    const pfpCx = leftEdge - 32 - g.pfpR;
+    circleImage(ctx, pimg, pfpCx, cy, g.pfpR);
+    ctx.strokeStyle = T.line; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(pfpCx, cy, g.pfpR, 0, Math.PI * 2); ctx.stroke();
+    leftEdge = pfpCx - g.pfpR;
+  }
+  if (userName) {
+    ctx.font = mono(g.headMono); ctx.fillStyle = T.ink2; ctx.textAlign = "right";
+    ctx.fillText(userName, leftEdge - 14, cy + g.headMono * 0.36);
   }
 
-  if (livePrice?.change24h !== undefined) {
-    const chg = livePrice.change24h, up = chg >= 0;
-    const chgTxt = `${fmtPct(chg)} today`;
-    const tw = ctx.measureText(chgTxt).width + 22;
-    const pillY = H - 100;
-    rr(ctx, panelCX - tw / 2, pillY, tw, 28, 14);
-    ctx.fillStyle = up ? "rgba(255,255,255,0.2)" : "rgba(220,38,38,0.5)"; ctx.fill();
-    ctx.fillStyle = "#FFFFFF"; ctx.font = "bold 14px Arial"; ctx.textAlign = "center";
-    ctx.fillText(chgTxt, panelCX, pillY + 19);
+  hairline(ctx, g.pad, g.headerBottom, W - g.pad, g.headerBottom);
+  return g.headerBottom;
+}
+
+// ── Footer — mono technical line, every card ─────────────────────────────────
+function drawFooter({ ctx, W, H, format }, g) {
+  const y = H - g.footLine;
+  hairline(ctx, g.pad, y, W - g.pad, y);
+  const left = `scenario simulation · not financial advice · cmvng · ${MODEL_LABEL.toLowerCase()}`;
+  // shrink until both ends fit with breathing room — measureText decides
+  let fs = g.footFs;
+  ctx.font = mono(fs);
+  while (fs > 10 && ctx.measureText(left).width + ctx.measureText("cmvng.app").width + 32 > W - g.pad * 2) {
+    fs -= 1; ctx.font = mono(fs);
   }
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = T.ink3; ctx.textAlign = "left"; setLS(ctx, "0.5px");
+  ctx.fillText(left, g.pad, H - g.footBase);
+  ctx.fillStyle = T.ink; ctx.textAlign = "right";
+  ctx.fillText("cmvng.app", W - g.pad, H - g.footBase);
+  setLS(ctx, "0px");
+  if (format === "story" && g.cta) {
+    ctx.font = mono(g.ctaFs); ctx.fillStyle = T.ink; ctx.textAlign = "center"; setLS(ctx, "0.5px");
+    ctx.fillText("build your own plan · cmvng.app", W / 2, H - g.ctaBase);
+    setLS(ctx, "0px");
+  }
+  return y;
+}
 
-  const trendColor = analysis.trend === "Uptrend" ? "#4ADE80" : analysis.trend === "Downtrend" ? "#FCA5A5" : "#FDE68A";
-  ctx.fillStyle = trendColor; ctx.font = "bold 15px Arial"; ctx.textAlign = "center";
-  ctx.fillText(analysis.trend.toUpperCase(), panelCX, H - 64);
-  ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.font = "12px Arial";
-  ctx.fillText(analysis.verdict, panelCX, H - 46);
+// mono whisper caption
+function caption(ctx, text, x, baseY, fs) {
+  ctx.font = mono(fs); ctx.fillStyle = T.ink3; ctx.textAlign = "left"; setLS(ctx, "1px");
+  ctx.fillText(text, x, baseY);
+  setLS(ctx, "0px");
+}
 
-  // right panel
-  ctx.fillStyle = G_dark; ctx.font = "bold 15px Arial"; ctx.textAlign = "left";
-  ctx.fillText("MY DCA PLAN", RX + PAD, 46);
-  const planTxt = `${fmtUSD(sim.amtPer)} ${freqLabel.toLowerCase()} · ${months} month${months > 1 ? "s" : ""} · ${sim.entries} buys · ${fmtUSD(totalInvested)} total`;
-  ctx.fillStyle = "#6B7280"; ctx.font = "14px Arial";
-  ctx.fillText(planTxt, RX + PAD, 68);
-  ctx.strokeStyle = "#E2F5E9"; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(RX + PAD, 82); ctx.lineTo(W - PAD, 82); ctx.stroke();
+// giant tabular ink numeral — THE hero of every card
+function hero(ctx, text, x, baseY, maxFs, maxW) {
+  const fs = fitSize(ctx, text, maxFs, maxW);
+  ctx.font = sans(fs, 500); ctx.fillStyle = T.ink; ctx.textAlign = "left";
+  setLS(ctx, `${-(fs * 0.045)}px`);
+  ctx.fillText(text, x, baseY);
+  setLS(ctx, "0px");
+  return baseY;
+}
+
+// spec-sheet rows: mono label left / mono figure right, --line-2 dividers
+function specRows(ctx, rows, { x, y, w, fs, rowH }) {
+  rows.forEach(([label, value, color], i) => {
+    const base = y + rowH * i + rowH * 0.62;
+    ctx.font = mono(fs); ctx.textAlign = "left"; ctx.fillStyle = T.ink2; setLS(ctx, "0.5px");
+    ctx.fillText(label, x, base);
+    setLS(ctx, "0px");
+    ctx.textAlign = "right"; ctx.fillStyle = color || T.ink;
+    ctx.fillText(value, x + w, base);
+    if (i < rows.length - 1) hairline(ctx, x, y + rowH * (i + 1), x + w, y + rowH * (i + 1), T.line2);
+  });
+  return y + rowH * rows.length;
+}
+
+// ── Outcome ruler on canvas — mirrors ScenarioRuler.jsx ─────────────────────
+const SHORT = { histWorst: "worst-like", severe: "−50%", moderate: "−20%", flat: "flat", target: "target", histBest: "best-like" };
+const markerColor = s =>
+  s.id === "severe" ? T.lossDeep
+  : s.movePct < 0 ? T.loss
+  : s.movePct > 0 ? T.gain
+  : T.ink3;
+
+function diamond(ctx, cx, cy, r) {
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r, cy); ctx.lineTo(cx, cy + r); ctx.lineTo(cx - r, cy);
+  ctx.closePath();
+}
+
+function drawRuler(ctx, scenarios, { x, y, w, fs, r }) {
+  if (!scenarios?.length) return y;
+  const sorted = [...scenarios].sort((a, b) => a.movePct - b.movePct);
+  const min = sorted[0].movePct, max = sorted[sorted.length - 1].movePct;
+  const span = max - min || 1;
+  const padX = Math.round(w * 0.05);
+  const px = m => x + padX + ((m - min) / span) * (w - padX * 2);
+  const lineH = Math.round(fs * 1.35);
+  const stackH = lineH * 3;             // room for a 3-line stack (target)
+  const axisY = y + stackH + Math.round(fs * 0.6);
+
+  // one hairline axis with end ticks
+  hairline(ctx, px(min), axisY, px(max), axisY);
+  hairline(ctx, px(min), axisY - 5, px(min), axisY + 5);
+  hairline(ctx, px(max), axisY - 5, px(max), axisY + 5);
+
+  ctx.font = mono(fs);
+  sorted.forEach((s, i) => {
+    const isTarget = s.id === "target";
+    const cx = px(s.movePct);
+    const name = SHORT[s.id] || String(s.name || "").toLowerCase();
+    const value = fmtUSD(s.value);
+    const lines = [
+      [name, isTarget ? T.ink : T.ink3],
+      [value, T.ink],
+    ];
+    if (isTarget) lines.push([sPct(Math.round(s.roiPct)), s.roiPct >= 0 ? T.gain : T.loss]);
+
+    // marker: solid ink target, hairline-outlined diamond otherwise
+    if (isTarget) {
+      diamond(ctx, cx, axisY, r * 1.35);
+      ctx.fillStyle = T.ink; ctx.fill();
+    } else {
+      diamond(ctx, cx, axisY, r);
+      ctx.fillStyle = T.paper; ctx.fill();
+      ctx.strokeStyle = markerColor(s); ctx.lineWidth = Math.max(1.2, fs / 11); ctx.stroke();
+    }
+
+    // clamp the stack center so text never leaves the card — measureText
+    const half = Math.max(...lines.map(l => ctx.measureText(l[0]).width)) / 2;
+    const lx = Math.max(x + half, Math.min(x + w - half, cx));
+    const above = i % 2 === 0;
+    ctx.textAlign = "center";
+    lines.forEach(([text, color], k) => {
+      const by = above
+        ? axisY - r * 1.5 - 8 - lineH * (lines.length - 1 - k)
+        : axisY + r * 1.5 + fs + 8 + lineH * k;
+      ctx.fillStyle = color;
+      ctx.fillText(text, lx, by);
+    });
+  });
+  ctx.textAlign = "left";
+  return axisY + r * 1.5 + fs + 8 + lineH * 2;
+}
+
+// ── Content: "plan" (default) ────────────────────────────────────────────────
+function drawPlan(o, g, region) {
+  const { ctx, W, format, asset, sim, targetPct, months, freqLabel } = o;
+  const { pad } = g;
+  const capBase = region.y + Math.round(g.capFs * (format === "x" ? 2.4 : 4.2));
+  caption(ctx, `if ${asset.symbol.toLowerCase()} reaches ${fmtPrice(sim.targetPrice)} (${sPct(targetPct)})`, pad, capBase, g.capFs);
+
+  const heroBase = hero(ctx, fmtUSD(sim.targetVal), pad, capBase + Math.round(g.heroFs * 1.06), g.heroFs, region.w);
 
   // Color ALWAYS by profit sign — never by market verdict.
-  const profitColor = sim.targetProfit >= 0 ? "#16A34A" : "#DC2626";
-  ctx.fillStyle = "#16A34A"; ctx.font = "bold 14px Arial";
-  ctx.fillText(`IF ${asset.symbol.toUpperCase()} HITS +${targetPct}%  →  ${fmtPrice(sim.targetPrice)}`, RX + PAD, 110);
-  ctx.fillStyle = G_dark; ctx.font = "bold 84px Arial";
-  ctx.fillText(fmtUSD(sim.targetVal), RX + PAD, 202);
-  ctx.fillStyle = profitColor; ctx.font = "bold 20px Arial";
-  const profitTxt = `Profit: +${fmtUSD(sim.targetProfit)}`;
-  ctx.fillText(profitTxt, RX + PAD, 234);
-  const profW = ctx.measureText(profitTxt).width;
-  const roiTxt = `+${sim.targetROI.toFixed(0)}% return`;
-  const roiW = ctx.measureText(roiTxt).width + 24;
-  rr(ctx, RX + PAD + profW + 14, 215, roiW, 26, 13);
-  ctx.fillStyle = profitColor; ctx.fill();
-  ctx.fillStyle = "#fff"; ctx.font = "bold 13px Arial";
-  ctx.fillText(roiTxt, RX + PAD + profW + 26, 233);
+  const profitColor = sim.targetProfit >= 0 ? T.gain : T.loss;
+  const subBase = heroBase + Math.round(g.subFs * 1.9);
+  ctx.font = mono(g.subFs); ctx.textAlign = "left";
+  const part1 = `${sUSD(sim.targetProfit)} · ${sPct(sim.targetROI)}`;
+  ctx.fillStyle = profitColor;
+  ctx.fillText(part1, pad, subBase);
+  const p1w = ctx.measureText(part1).width;
+  ctx.fillStyle = T.ink3;
+  ctx.fillText(" · a scenario, not a forecast", pad + p1w, subBase);
 
-  ctx.strokeStyle = "#E2F5E9"; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(RX + PAD, 252); ctx.lineTo(W - PAD, 252); ctx.stroke();
-  ctx.fillStyle = "#9CA3AF"; ctx.font = "bold 11px Arial";
-  ctx.fillText("OTHER SCENARIOS", RX + PAD, 272);
+  // the plan itself, one mono line
+  const planBase = subBase + Math.round(g.planFs * 2.1);
+  ctx.font = mono(g.planFs); ctx.fillStyle = T.ink2;
+  ctx.fillText(
+    `${fmtUSD(sim.amtPer)} ${freqLabel.toLowerCase()} · ${months} month${months > 1 ? "s" : ""} · ${sim.entries} buys · ${fmtUSD(sim.totalInvested)} total`,
+    pad, planBase,
+  );
 
-  // scenario columns (v1 sizing)
-  const colW = (RW - PAD * 2) / 3;
-  scenarioBoxes(sim).forEach((sc, i) => {
-    const sx = RX + PAD + i * colW, sy = 282, sw = colW - 10, sh = 138;
-    rr(ctx, sx, sy, sw, sh, 10); ctx.fillStyle = sc.bg; ctx.fill();
-    ctx.strokeStyle = sc.brd; ctx.lineWidth = 1.5; ctx.stroke();
-    ctx.fillStyle = sc.c; ctx.font = "bold 11px Arial"; ctx.textAlign = "left";
-    ctx.fillText(sc.label, sx + 12, sy + 22);
-    ctx.fillStyle = G_dark; ctx.font = "bold 28px Arial";
-    ctx.fillText(fmtUSD(sc.val), sx + 12, sy + 64);
-    ctx.fillStyle = sc.c; ctx.font = "bold 15px Arial";
-    ctx.fillText(sc.change, sx + 12, sy + 90);
-    ctx.fillStyle = "#6B7280"; ctx.font = "13px Arial";
-    ctx.fillText(sc.note, sx + 12, sy + 112);
-  });
+  // THE graphic: the outcome ruler
+  caption(ctx, "outcome ruler · test cases, not predictions", pad, g.rulerLabelY, Math.round(g.capFs * 0.8));
+  drawRuler(ctx, sim.scenarios, { x: pad, y: g.rulerY, w: region.w, fs: g.rulerFs, r: g.rulerR });
 
-  const infoY = 438;
-  rr(ctx, RX + PAD, infoY, RW - PAD * 2, 56, 8);
-  ctx.fillStyle = "#F8FAFC"; ctx.fill(); ctx.strokeStyle = "#E2F5E9"; ctx.lineWidth = 1; ctx.stroke();
-  ctx.fillStyle = "#9CA3AF"; ctx.font = "bold 11px Arial"; ctx.textAlign = "left";
-  ctx.fillText("VALUE AT LIVE PRICE", RX + PAD + 14, infoY + 18);
-  ctx.fillStyle = G_dark; ctx.font = "bold 21px Arial";
-  ctx.fillText(fmtUSD(sim.currentVal), RX + PAD + 14, infoY + 44);
-  const mid = RX + PAD + (RW - PAD * 2) / 2;
-  ctx.strokeStyle = "#E2F5E9"; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(mid, infoY + 8); ctx.lineTo(mid, infoY + 48); ctx.stroke();
-  ctx.fillStyle = "#9CA3AF"; ctx.font = "bold 11px Arial";
-  ctx.fillText("AVG ENTRY PRICE", mid + 14, infoY + 18);
-  ctx.fillStyle = G_dark; ctx.font = "bold 21px Arial";
-  ctx.fillText(fmtPrice(sim.avgEntry), mid + 14, infoY + 44);
-
-  ctx.fillStyle = "#CBD5E1"; ctx.font = "12px Arial"; ctx.textAlign = "left";
-  ctx.fillText(`Not financial advice · DYOR · ${MODEL_LABEL}`, RX + PAD, H - 18);
-  ctx.fillStyle = "#16A34A"; ctx.font = "bold 12px Arial"; ctx.textAlign = "right";
-  ctx.fillText("cmvng.app", W - PAD, H - 18);
-  ctx.fillStyle = "rgba(255,255,255,0.2)"; ctx.font = "11px Arial"; ctx.textAlign = "center";
-  ctx.fillText("Not financial advice · DYOR", LP / 2, H - 18);
-}
-
-// ── Shared header for vertical formats ───────────────────────────────────────
-async function drawVerticalHeader({ ctx, W, asset, userName, profileImg, livePrice, analysis }, bandH) {
-  ctx.fillStyle = "#16A34A"; ctx.fillRect(0, 0, W, bandH);
-  ctx.fillStyle = "rgba(255,255,255,0.05)"; ctx.beginPath(); ctx.arc(W * 0.08, bandH * 0.9, 260, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = "rgba(255,255,255,0.04)"; ctx.beginPath(); ctx.arc(W * 0.92, 0, 220, 0, Math.PI * 2); ctx.fill();
-
-  ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.font = "bold 34px Arial"; ctx.textAlign = "left";
-  ctx.fillText("CMVNG", 40, 62);
-  ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.font = "18px Arial";
-  ctx.fillText("DCA Simulator", 40, 88);
-
-  const cx = W / 2;
-  const liveP = livePrice?.price || asset.current_price;
-  let y = bandH * 0.36;
-  if (profileImg) {
-    const pimg = await loadImg(profileImg);
-    circleImage(ctx, pimg, cx, y, 90);
-    ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.arc(cx, y, 93, 0, Math.PI * 2); ctx.stroke();
-    if (userName) {
-      ctx.fillStyle = "#fff"; ctx.font = "bold 28px Arial"; ctx.textAlign = "center";
-      ctx.fillText(userName, cx, y + 130);
-    }
-    y = bandH * 0.78;
-    const logo = asset.image ? await loadImg(asset.image) : null;
-    circleImage(ctx, logo, cx - 90, y, 40, "rgba(255,255,255,0.95)");
-    ctx.fillStyle = "#fff"; ctx.font = "bold 42px Arial"; ctx.textAlign = "left";
-    ctx.fillText(asset.symbol.toUpperCase(), cx - 34, y + 6);
-    ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.font = "bold 26px Arial";
-    ctx.fillText(fmtPrice(liveP), cx - 34, y + 40);
-  } else {
-    const logo = asset.image ? await loadImg(asset.image) : null;
-    circleImage(ctx, logo, cx, y, 85, "rgba(255,255,255,0.95)");
-    ctx.fillStyle = "#fff"; ctx.font = "bold 52px Arial"; ctx.textAlign = "center";
-    ctx.fillText(asset.symbol.toUpperCase(), cx, y + 150);
-    ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.font = "24px Arial";
-    ctx.fillText(asset.name, cx, y + 184);
-    ctx.fillStyle = "#fff"; ctx.font = "bold 32px Arial";
-    ctx.fillText(fmtPrice(liveP), cx, y + 228);
-    if (userName) {
-      ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.font = "bold 22px Arial";
-      ctx.fillText(userName, cx, y + 262);
-    }
+  // story: plan spec sheet lower
+  if (format === "story") {
+    const rows = [
+      ["per buy", fmtUSD(sim.amtPer)],
+      ["frequency", String(freqLabel).toLowerCase()],
+      ["duration", `${months} month${months > 1 ? "s" : ""} · ${sim.entries} buys`],
+      ["total invested", fmtUSD(sim.totalInvested)],
+      ["avg entry price", fmtPrice(sim.avgEntry)],
+    ];
+    specRows(ctx, rows, { x: pad, y: 1210, w: W - pad * 2, fs: g.specFs, rowH: g.rowH });
   }
-  const trendColor = analysis.trend === "Uptrend" ? "#4ADE80" : analysis.trend === "Downtrend" ? "#FCA5A5" : "#FDE68A";
-  ctx.fillStyle = trendColor; ctx.font = "bold 20px Arial"; ctx.textAlign = "center";
-  ctx.fillText(`${analysis.trend.toUpperCase()} · ${analysis.verdict}`, W / 2, bandH - 28);
 }
 
-async function drawSquare(args) {
-  const { ctx, W, H, asset, sim, targetPct, months, freqLabel } = args;
-  ctx.fillStyle = "#F0FDF4"; ctx.fillRect(0, 0, W, H);
-  const bandH = Math.round(H * 0.42);
-  await drawVerticalHeader(args, bandH);
+// ── Content: "reality" — the verdict word is the hero ────────────────────────
+function drawReality(o, g, region) {
+  const { ctx, format, sim, targetPct } = o;
+  const { pad } = g;
+  const r = sim.reality;
+  const capBase = region.y + Math.round(g.capFs * (format === "x" ? 2.4 : 4.2));
+  caption(ctx, `reality check · target ${sPct(targetPct)} over ${sim.windowDays} days`, pad, capBase, g.capFs);
 
-  const PAD = 50;
-  let y = bandH + 64;
-  ctx.fillStyle = "#052E16"; ctx.font = "bold 22px Arial"; ctx.textAlign = "left";
-  ctx.fillText("MY DCA PLAN", PAD, y);
-  ctx.fillStyle = "#6B7280"; ctx.font = "20px Arial";
-  ctx.fillText(`${fmtUSD(sim.amtPer)} ${freqLabel.toLowerCase()} · ${months} mo · ${sim.entries} buys · ${fmtUSD(sim.totalInvested)} total`, PAD, y + 32);
+  // verdict word at numeral scale — modest / moderate / ambitious / extreme
+  const word = String(r.label).split(" ").pop().toLowerCase();
+  const heroBase = hero(ctx, word, pad, capBase + Math.round(g.heroFs * 1.06), g.heroFs, region.w);
 
-  y += 92;
-  ctx.fillStyle = "#16A34A"; ctx.font = "bold 22px Arial";
-  ctx.fillText(`IF ${asset.symbol.toUpperCase()} HITS +${targetPct}% → ${fmtPrice(sim.targetPrice)}`, PAD, y);
-  ctx.fillStyle = "#052E16"; ctx.font = "bold 110px Arial";
-  ctx.fillText(fmtUSD(sim.targetVal), PAD, y + 118);
-  const profitColor = sim.targetProfit >= 0 ? "#16A34A" : "#DC2626";
-  ctx.fillStyle = profitColor; ctx.font = "bold 30px Arial";
-  ctx.fillText(`Profit: +${fmtUSD(sim.targetProfit)}  (+${sim.targetROI.toFixed(0)}%)`, PAD, y + 170);
+  const rowsY = heroBase + Math.round(g.specFs * 1.6);
+  const rowW = Math.min(region.w, Math.round(560 * (g.specFs / 17)));
+  const bottom = specRows(ctx, [
+    ["windows sampled", String(r.count)],
+    ["typical move", `±${Math.round(r.typicalPct)}%`],
+    ["largest gain", sPct(Math.round(r.largestGainPct)), T.gain],
+    ["largest drop", sPct(Math.round(r.largestLossPct)), T.loss],
+  ], { x: pad, y: rowsY, w: rowW, fs: g.specFs, rowH: g.rowH });
 
-  drawScenarioRow(ctx, sim, PAD, y + 210, W - PAD * 2, 150, "#052E16");
-
-  ctx.fillStyle = "#CBD5E1"; ctx.font = "17px Arial"; ctx.textAlign = "left";
-  ctx.fillText(`Not financial advice · DYOR · ${MODEL_LABEL}`, PAD, H - 28);
-  ctx.fillStyle = "#16A34A"; ctx.font = "bold 18px Arial"; ctx.textAlign = "right";
-  ctx.fillText("cmvng.app", W - PAD, H - 28);
+  caption(ctx, "historical observations, not probabilities", pad, bottom + Math.round(g.capFs * 2), Math.round(g.capFs * 0.85));
 }
 
-async function drawStory(args) {
-  const { ctx, W, H, asset, sim, targetPct, months, freqLabel } = args;
-  ctx.fillStyle = "#F0FDF4"; ctx.fillRect(0, 0, W, H);
-  const bandH = Math.round(H * 0.40);
-  await drawVerticalHeader(args, bandH);
+// ── Content: "comparison" — dca vs lump sum (vs hybrid) ──────────────────────
+function drawComparison(o, g, region) {
+  const { ctx, format, sim, targetPct } = o;
+  const { pad } = g;
+  const capBase = region.y + Math.round(g.capFs * (format === "x" ? 2.4 : 3.2));
+  caption(ctx, `dca vs lump sum · same $, same coin, valued at ${sPct(targetPct)}`, pad, capBase, g.capFs);
 
-  const PAD = 60;
-  let y = bandH + 90;
-  ctx.fillStyle = "#052E16"; ctx.font = "bold 26px Arial"; ctx.textAlign = "left";
-  ctx.fillText("MY DCA PLAN", PAD, y);
-  ctx.fillStyle = "#6B7280"; ctx.font = "23px Arial";
-  ctx.fillText(`${fmtUSD(sim.amtPer)} ${freqLabel.toLowerCase()} · ${months} mo · ${sim.entries} buys`, PAD, y + 38);
-  ctx.fillText(`${fmtUSD(sim.totalInvested)} total invested`, PAD, y + 70);
+  const rows = sim.comparison;
+  const leader = rows.reduce((a, b) => (b.valueAtTarget > a.valueAtTarget ? b : a), rows[0]);
+  let y = capBase + Math.round(g.capFs * 1.6);
+  rows.forEach((s, i) => {
+    const nameBase = y + Math.round(g.specFs * 1.5);
+    ctx.font = mono(g.specFs); ctx.textAlign = "left"; setLS(ctx, "0.5px");
+    ctx.fillStyle = s.id === leader.id ? T.ink : T.ink2;
+    ctx.fillText(`${s.name.toLowerCase()}${s.id === leader.id ? " · ahead" : ""}`, pad, nameBase);
+    setLS(ctx, "0px");
 
-  y += 150;
-  ctx.fillStyle = "#16A34A"; ctx.font = "bold 26px Arial";
-  ctx.fillText(`IF ${asset.symbol.toUpperCase()} HITS +${targetPct}%`, PAD, y);
-  ctx.fillStyle = "#6B7280"; ctx.font = "22px Arial";
-  ctx.fillText(`Target price ${fmtPrice(sim.targetPrice)}`, PAD, y + 34);
-  ctx.fillStyle = "#052E16"; ctx.font = "bold 130px Arial";
-  ctx.fillText(fmtUSD(sim.targetVal), PAD, y + 170);
-  const profitColor = sim.targetProfit >= 0 ? "#16A34A" : "#DC2626";
-  ctx.fillStyle = profitColor; ctx.font = "bold 36px Arial";
-  ctx.fillText(`Profit: +${fmtUSD(sim.targetProfit)}  (+${sim.targetROI.toFixed(0)}%)`, PAD, y + 236);
+    const valBase = nameBase + Math.round(g.valFs * 1.12);
+    ctx.font = mono(g.valFs); ctx.fillStyle = T.ink;
+    ctx.fillText(fmtUSD(s.valueAtTarget), pad, valBase);
+    // Color ALWAYS by profit sign — never by market verdict.
+    ctx.font = mono(Math.round(g.valFs * 0.42)); ctx.textAlign = "right";
+    ctx.fillStyle = s.roiAtTarget >= 0 ? T.gain : T.loss;
+    ctx.fillText(sPct(s.roiAtTarget), pad + region.w, valBase);
+    ctx.textAlign = "left";
 
-  y += 320;
-  // stacked scenarios for vertical space
-  scenarioBoxes(sim).forEach((sc, i) => {
-    const sy = y + i * 130, sh = 112;
-    rr(ctx, PAD, sy, W - PAD * 2, sh, 14); ctx.fillStyle = sc.bg; ctx.fill();
-    ctx.strokeStyle = sc.brd; ctx.lineWidth = 2; ctx.stroke();
-    ctx.fillStyle = sc.c; ctx.font = "bold 24px Arial"; ctx.textAlign = "left";
-    ctx.fillText(`${sc.label}  (${sc.change})`, PAD + 26, sy + 44);
-    ctx.fillStyle = "#052E16"; ctx.font = "bold 40px Arial";
-    ctx.fillText(fmtUSD(sc.val), PAD + 26, sy + 90);
-    ctx.fillStyle = "#6B7280"; ctx.font = "22px Arial"; ctx.textAlign = "right";
-    ctx.fillText(sc.note, W - PAD - 26, sy + 90);
+    y += g.cmpRowH;
+    if (i < rows.length - 1) hairline(ctx, pad, y - Math.round(g.cmpRowH * 0.16), pad + region.w, y - Math.round(g.cmpRowH * 0.16), T.line2);
   });
 
-  ctx.fillStyle = "#9CA3AF"; ctx.font = "bold 24px Arial"; ctx.textAlign = "center";
-  ctx.fillText("Build your own plan → cmvng.app", W / 2, H - 96);
-  ctx.fillStyle = "#CBD5E1"; ctx.font = "19px Arial";
-  ctx.fillText(`Not financial advice · DYOR · ${MODEL_LABEL}`, W / 2, H - 52);
+  caption(ctx, "which strategy wins depends on the path — neither always wins", pad, y + Math.round(g.capFs * 1.6), Math.round(g.capFs * 0.85));
 }
