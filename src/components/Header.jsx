@@ -1,24 +1,22 @@
 import React from "react";
-import { G } from "../styles/theme.js";
-import { Dot } from "./ui.jsx";
+import { T, SANS, MONO, monoLabel } from "../styles/theme.js";
 
 export default function Header({ onOpenSaved, savedCount }) {
   return (
-    <nav aria-label="Main" style={{ background: G.surface, borderBottom: `1px solid ${G.border}`, padding: "0 16px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 62, position: "sticky", top: 0, zIndex: 50, boxShadow: "0 1px 8px rgba(22,163,74,0.07)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-        <div aria-hidden="true" style={{ width: 34, height: 34, background: G.green, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, fontSize: 13, flexShrink: 0 }}>CM</div>
-        <span style={{ fontWeight: 800, fontSize: 17, color: G.green }}>CMVNG</span>
-        <span style={{ fontWeight: 400, fontSize: 14, color: G.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>DCA Simulator</span>
+    <nav aria-label="Main" style={{ background: T.paper, borderBottom: `0.5px solid ${T.line}`, padding: "0 16px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56, position: "sticky", top: 0, zIndex: 50 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+        <span style={{ fontFamily: SANS, fontWeight: 500, fontSize: 16, color: T.ink, letterSpacing: "-0.01em" }}>
+          cmvng<span aria-hidden="true" style={{ color: T.blue }}>.</span>
+        </span>
+        <span style={{ ...monoLabel, marginBottom: 0 }}>dca simulator</span>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
         {savedCount > 0 && (
-          <button onClick={onOpenSaved} style={{ background: G.surfaceAlt, color: G.sub, border: `1px solid ${G.border}`, borderRadius: 20, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-            My plans ({savedCount})
+          <button onClick={onOpenSaved} style={{ background: "transparent", color: T.ink2, border: "none", padding: "4px 0", fontFamily: MONO, fontSize: 12, letterSpacing: "0.03em", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 3 }}>
+            my plans ({savedCount})
           </button>
         )}
-        <div style={{ background: G.greenPale, color: G.green, border: `1px solid ${G.greenBorder}`, borderRadius: 20, padding: "4px 12px", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
-          <Dot />Live · Top 250
-        </div>
+        <span style={{ ...monoLabel, marginBottom: 0, whiteSpace: "nowrap" }}>live · top 250</span>
       </div>
     </nav>
   );

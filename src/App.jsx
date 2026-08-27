@@ -1,10 +1,10 @@
 // CMVNG DCA Simulator — app shell and orchestration.
-// UI lives in src/components, market data in src/hooks + src/services, and
-// all calculation in src/lib/simulation (pure, unit-tested).
+// UI in src/components (INSTRUMENT design system — see DESIGN.md), market
+// data in src/hooks + src/services, all calculation in src/lib/simulation.
 
 import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { G, card, secLabel, stepNum, GLOBAL_CSS } from "./styles/theme.js";
-import { Spinner } from "./components/ui.jsx";
+import { T, SANS, MONO, GLOBAL_CSS, btnPrimary, btnSecondary, btnOption, body } from "./styles/theme.js";
+import { Section } from "./components/ui.jsx";
 import Header from "./components/Header.jsx";
 import CoinSelector from "./components/CoinSelector.jsx";
 import CapitalInput from "./components/CapitalInput.jsx";
@@ -158,36 +158,34 @@ export default function App() {
     : null;
 
   return (
-    <div style={{ minHeight: "100vh", background: G.bg, fontFamily: "'Inter','Segoe UI',sans-serif", color: G.text, paddingBottom: showSticky ? 90 : 40 }}>
+    <div style={{ minHeight: "100vh", background: T.paper, fontFamily: SANS, color: T.ink, paddingBottom: showSticky ? 96 : 48 }}>
       <style>{GLOBAL_CSS}</style>
 
-      {/* sticky action bar after a simulation */}
+      {/* sticky action bar after a simulation — one primary, one secondary */}
       {showSticky && (
         <div style={{
           position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100,
-          background: "rgba(255,255,255,0.97)", borderTop: `2px solid ${G.greenBorder}`,
-          backdropFilter: "blur(8px)", padding: "10px 16px",
-          display: "flex", gap: 10, alignItems: "center",
-          boxShadow: "0 -4px 24px rgba(22,163,74,0.12)",
+          background: T.paper, borderTop: `0.5px solid ${T.line}`,
+          padding: "10px 16px", display: "flex", gap: 8, alignItems: "stretch",
         }}>
           {mode === "scenario" && (
-            <button onClick={scrollToShare} style={{ flex: 2, padding: "13px", borderRadius: 12, cursor: "pointer", fontFamily: "inherit", fontSize: 15, fontWeight: 900, border: "none", background: G.green, color: "#fff", boxShadow: "0 4px 16px rgba(22,163,74,0.35)" }}>
-              🔥 Share Your Plan
+            <button onClick={scrollToShare} style={{ ...btnPrimary, flex: 2 }}>
+              Share your plan
             </button>
           )}
-          <button onClick={handleSim} disabled={simApi.simState === "running"} style={{ flex: 1, padding: "13px", borderRadius: 12, cursor: "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: 700, border: `2px solid ${G.greenBorder}`, background: G.greenPale, color: G.green }}>
-            Recalculate ↻
+          <button onClick={handleSim} disabled={simApi.simState === "running"} style={{ ...btnSecondary, flex: 1 }}>
+            Recalculate
           </button>
         </div>
       )}
 
       <Header onOpenSaved={() => setShowSaved(v => !v)} savedCount={saved.plans.length} />
 
-      <main style={{ maxWidth: 680, margin: "0 auto", padding: "28px 16px" }}>
+      <main style={{ maxWidth: 640, margin: "0 auto", padding: "32px 16px" }}>
 
         {sharedBanner && (
-          <div role="status" style={{ background: G.bluePale, border: "1px solid #BFDBFE", borderRadius: 12, padding: "10px 16px", marginBottom: 16, fontSize: 13, color: G.blue, fontWeight: 600 }}>
-            🔗 A shared plan was loaded from your link — review it below, then run the simulation.
+          <div role="status" style={{ borderTop: `0.5px solid ${T.line}`, borderBottom: `0.5px solid ${T.line}`, padding: "10px 0", marginBottom: 22, ...body, color: T.blueDeep }}>
+            A shared plan was loaded from your link — review it below, then run the simulation.
           </div>
         )}
 
@@ -205,18 +203,17 @@ export default function App() {
         )}
 
         {/* hero */}
-        <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <h1 style={{ fontSize: "clamp(24px,4.5vw,40px)", fontWeight: 900, color: G.dark, margin: 0, lineHeight: 1.15 }}>
-            Build your crypto DCA plan.<br /><span style={{ color: G.green }}>Stress-test it. Share it.</span>
+        <div style={{ marginBottom: 36 }}>
+          <h1 style={{ fontFamily: SANS, fontSize: "clamp(26px,5vw,38px)", fontWeight: 500, color: T.ink, margin: 0, lineHeight: 1.15, letterSpacing: "-0.03em" }}>
+            Build a crypto DCA plan.<br />Stress-test it against real data.
           </h1>
-          <p style={{ color: G.muted, fontSize: 15, marginTop: 10, marginBottom: 0 }}>
-            Pick a coin · Set your plan · Test scenarios against real market data · Not a prediction — a decision tool
+          <p style={{ ...body, marginTop: 12, marginBottom: 0 }}>
+            Pick a coin, set your plan, test scenarios. A decision tool — not a prediction.
           </p>
         </div>
 
         {/* STEP 1 — coin */}
-        <section style={card} aria-label="Step 1: choose your coin">
-          <div style={secLabel}><span style={stepNum} aria-hidden="true">1</span>Choose Your Coin</div>
+        <Section label="step 1 · choose your coin" ariaLabel="Step 1: choose your coin">
           {coinsApi.loading ? (
             <ProgressLoading label="Loading top 250 coins…" progress={coinsApi.progress} />
           ) : coinsApi.error ? (
@@ -229,11 +226,10 @@ export default function App() {
               <ErrorState compact message={market.histError} onRetry={market.retryHistory} />
             </div>
           )}
-        </section>
+        </Section>
 
         {/* STEP 2 — plan */}
-        <section style={card} aria-label="Step 2: build your plan">
-          <div style={secLabel}><span style={stepNum} aria-hidden="true">2</span>Build Your Plan</div>
+        <Section label="step 2 · build your plan" ariaLabel="Step 2: build your plan">
           <CapitalInput capital={capital} onChange={setCapital} />
           <FrequencySelector freqId={freqId} months={safeMo} onChange={setFreqId} />
           <DurationSelector months={safeMo} maxMonths={maxMo} onChange={setMonths} />
@@ -243,36 +239,32 @@ export default function App() {
           </div>
 
           {/* mode switch */}
-          <div role="radiogroup" aria-label="Simulation mode" style={{ display: "flex", gap: 8, marginTop: 4 }}>
+          <div role="radiogroup" aria-label="Simulation mode" style={{ display: "flex", gap: 8, marginTop: 14 }}>
             {[
-              { id: "scenario", label: "Scenario simulation", desc: "Anchored to today's live price" },
-              { id: "backtest", label: "Historical backtest", desc: "Real past prices & dates" },
+              { id: "scenario", label: "Scenario simulation", desc: "anchored to the live price" },
+              { id: "backtest", label: "Historical backtest", desc: "real past prices and dates" },
             ].map(m => (
               <button key={m.id} role="radio" aria-checked={mode === m.id}
                 onClick={() => { setMode(m.id); simApi.reset(); if (m.id === "backtest") track("historical_backtest_opened", {}); }}
-                style={{
-                  flex: 1, padding: "10px 8px", borderRadius: 11, cursor: "pointer", textAlign: "left",
-                  border: `2px solid ${mode === m.id ? G.green : G.border}`,
-                  background: mode === m.id ? G.greenPale : G.surfaceAlt,
-                }}>
-                <span style={{ display: "block", fontSize: 13, fontWeight: 800, color: mode === m.id ? G.green : G.muted }}>{m.label}</span>
-                <span style={{ display: "block", fontSize: 11, color: G.muted, marginTop: 2 }}>{m.desc}</span>
+                style={{ ...btnOption(mode === m.id), flex: 1, textAlign: "left" }}>
+                <span style={{ display: "block", fontSize: 13 }}>{m.label}</span>
+                <span style={{ display: "block", fontFamily: MONO, fontSize: 11, letterSpacing: "0.03em", color: T.ink3, marginTop: 3 }}>{m.desc}</span>
               </button>
             ))}
           </div>
 
           {mode === "backtest" && (
-            <div style={{ marginTop: 12 }}>
-              <label htmlFor="bt-start" style={{ fontSize: 13, fontWeight: 700, color: G.sub, display: "block", marginBottom: 6 }}>
+            <div style={{ marginTop: 14 }}>
+              <label htmlFor="bt-start" style={{ ...body, color: T.ink, display: "block", marginBottom: 6 }}>
                 If I had started my {safeMo * 30}-day plan…
               </label>
               {backtestOptions.length === 0 ? (
-                <div style={{ fontSize: 13, color: G.amber }}>
+                <div style={{ ...body }}>
                   {selected ? "Not enough price history for this coin and duration." : "Select a coin first."}
                 </div>
               ) : (
                 <select id="bt-start" value={backtestOffsetMonths} onChange={e => setBacktestOffsetMonths(Number(e.target.value))}
-                  style={{ width: "100%", padding: "11px 14px", borderRadius: 12, border: `1.5px solid ${G.border}`, background: G.surfaceAlt, fontSize: 15, fontFamily: "inherit", color: G.text }}>
+                  style={{ width: "100%", padding: "11px 12px", borderRadius: 2, border: `1px solid ${T.line}`, background: T.paper, fontSize: 15, fontFamily: SANS, color: T.ink }}>
                   {backtestOptions.map(m => (
                     <option key={m} value={m}>{m} month{m > 1 ? "s" : ""} ago</option>
                   ))}
@@ -282,25 +274,23 @@ export default function App() {
           )}
 
           <SchedulePreview selected={selected} capital={config.capital} freqId={freqId} months={safeMo} targetPct={targetPct} mode={mode} />
-        </section>
+        </Section>
 
-        {/* simulate */}
+        {/* simulate — the primary action */}
         {selected && market.history && (
-          <button onClick={handleSim} disabled={!canSimulate} style={{
-            width: "100%", padding: "16px", borderRadius: 14, cursor: canSimulate ? "pointer" : "not-allowed",
-            fontFamily: "inherit", fontSize: 17, fontWeight: 800, border: "none",
-            background: simApi.simState === "running" ? "#D1D5DB" : `linear-gradient(135deg,${G.green},${G.green2})`,
-            color: simApi.simState === "running" ? "#9CA3AF" : "#fff",
-            marginBottom: 14,
-            boxShadow: simApi.simState === "running" ? "none" : "0 4px 18px rgba(22,163,74,0.32)",
-            transition: "all 0.2s", opacity: canSimulate || simApi.simState === "running" ? 1 : 0.6,
-          }}>
-            {simApi.simState === "running"
-              ? <><Spinner />&nbsp; {simApi.simMsg}</>
-              : simApi.simState === "done"
-                ? "Recalculate ↻"
-                : mode === "backtest" ? "Run Historical Backtest →" : "Show Me the Numbers →"}
-          </button>
+          <div style={{ margin: "22px 0 4px" }}>
+            <button onClick={handleSim} disabled={!canSimulate} style={{
+              ...btnPrimary,
+              opacity: canSimulate || simApi.simState === "running" ? 1 : 0.5,
+              cursor: canSimulate ? "pointer" : "not-allowed",
+            }}>
+              {simApi.simState === "running"
+                ? simApi.simMsg
+                : simApi.simState === "done"
+                  ? "Recalculate"
+                  : mode === "backtest" ? "Run historical backtest" : "Show me the numbers"}
+            </button>
+          </div>
         )}
 
         {simApi.simError && <ErrorState message={simApi.simError} onRetry={handleSim} />}
@@ -310,7 +300,7 @@ export default function App() {
           <ResultsView
             sim={simView} selected={selected} analysis={market.analysis}
             live={market.live} history={market.history}
-            targetPct={targetPct} months={safeMo}
+            targetPct={targetPct}
             shareRef={shareRef}
             shareSlot={
               <Suspense fallback={null}>
@@ -331,8 +321,8 @@ export default function App() {
           </Suspense>
         )}
 
-        <footer style={{ textAlign: "center", fontSize: 12, color: G.muted, marginTop: 16, paddingBottom: 8 }}>
-          CMVNG DCA Simulator · A scenario tool, not financial advice · DYOR · Data via CoinGecko
+        <footer style={{ borderTop: `0.5px solid ${T.line}`, marginTop: 36, paddingTop: 14, paddingBottom: 8, fontFamily: MONO, fontSize: 11, letterSpacing: "0.05em", color: T.ink3 }}>
+          scenario simulator · not financial advice · dyor · data via coingecko · cmvng
         </footer>
       </main>
     </div>
