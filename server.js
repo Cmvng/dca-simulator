@@ -9,6 +9,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import handler from "./api/coins.js";
+import { handlePlansRequest } from "./api/plans.js";
 
 const PORT = Number(process.env.PORT) || 3000;
 const DIST = resolve(fileURLToPath(new URL("./dist/", import.meta.url)));
@@ -60,6 +61,54 @@ async function serveApi(req, res, url) {
   res.end(body);
 }
 
+// /api/plans — server-stored public plans (api/plans.js owns store + routing).
+const PLANS_BODY_LIMIT = 16 * 1024; // 16KB is far beyond any valid plan config
+
+function readBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on("data", c => {
+      size += c.length;
+      if (size > limit) {
+        reject(Object.assign(new Error("Request body too large."), { status: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+async function servePlans(req, res, url) {
+  const writeJson = (status, body) => {
+    res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(body));
+  };
+  // first hop of x-forwarded-for, else the socket address (rate limiting only,
+  // held in memory — never stored)
+  const fwd = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  const ip = fwd || req.socket?.remoteAddress || "unknown";
+  let body = null;
+  if (req.method === "POST") {
+    let raw;
+    try {
+      raw = await readBody(req, PLANS_BODY_LIMIT);
+    } catch (e) {
+      return writeJson(e.status || 400, { error: e.status === 413 ? "Plan config too large." : "Could not read request body." });
+    }
+    try {
+      body = JSON.parse(raw || "null");
+    } catch {
+      return writeJson(400, { error: "Request body must be valid JSON." });
+    }
+  }
+  const out = handlePlansRequest({ method: req.method, url, body, ip });
+  writeJson(out.status, out.body);
+}
+
 async function serveStatic(res, pathname) {
   let rel = pathname.replace(/^\/+/, "");
   if (!rel) rel = "index.html";
@@ -89,6 +138,7 @@ http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://localhost");
     if (url.pathname === "/api/coins") return await serveApi(req, res, url);
+    if (url.pathname === "/api/plans") return await servePlans(req, res, url);
     if (url.pathname === "/healthz") { res.writeHead(200); return res.end("ok"); }
     return await serveStatic(res, url.pathname);
   } catch (e) {

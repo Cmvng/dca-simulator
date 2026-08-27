@@ -24,11 +24,16 @@ import { useSimulation } from "./hooks/useSimulation.js";
 import { useSavedPlans } from "./hooks/useSavedPlans.js";
 import { getFreq, validateCapital } from "./lib/simulation/dca.js";
 import { decodePlanFromHash } from "./lib/planUrl.js";
+import { fetchPlan, revokePlan, getToken } from "./lib/planApi.js";
 import { track } from "./lib/analytics.js";
 
 const SharePanel = React.lazy(() => import("./components/SharePanel.jsx"));
 const SavedPlansPanel = React.lazy(() => import("./components/SavedPlansPanel.jsx"));
 const BacktestView = React.lazy(() => import("./components/results/BacktestView.jsx"));
+const PublicPlanView = React.lazy(() => import("./components/PublicPlanView.jsx"));
+
+// /plan/<id> — server-stored public plan pages (SPA route)
+const PLAN_PATH = typeof window !== "undefined" ? /^\/plan\/([a-z0-9]{6,12})$/i.exec(window.location.pathname) : null;
 
 // Deterministic seed from the plan config → reproducible Monte Carlo runs.
 function planSeed(coinId, config) {
@@ -56,6 +61,10 @@ export default function App() {
   const [planSaved, setPlanSaved] = useState(false);
   const [sharedBanner, setSharedBanner] = useState(false);
   const pendingUrlPlan = useRef(decodePlanFromHash());
+  const [publicPlanId] = useState(PLAN_PATH ? PLAN_PATH[1].toLowerCase() : null);
+  const [publicRecord, setPublicRecord] = useState(null); // record | "missing" | "unavailable" | null
+  const publicAutoRan = useRef(false);
+  const publicMode = !!(publicRecord && typeof publicRecord === "object");
 
   const shareRef = useRef(null);
   const freq = getFreq(freqId);
@@ -88,11 +97,64 @@ export default function App() {
     pendingUrlPlan.current = null;
   }, [coinsApi.coins]);
 
+  // ── /plan/<id>: fetch the stored record, apply its config, auto-run ────────
+  useEffect(() => {
+    if (!publicPlanId) return;
+    let alive = true;
+    fetchPlan(publicPlanId).then(r => {
+      if (!alive) return;
+      if (!r) setPublicRecord("missing");
+      else if (r.unavailable) setPublicRecord("unavailable");
+      else setPublicRecord(r);
+    }).catch(() => alive && setPublicRecord("unavailable"));
+    return () => { alive = false; };
+  }, [publicPlanId]);
+
+  useEffect(() => {
+    if (!publicMode || coinsApi.coins.length === 0) return;
+    const cfg = publicRecord.config;
+    const coin = coinsApi.coins.find(c => c.id === cfg.coinId);
+    if (!coin) { setPublicRecord("missing"); return; }
+    setSelected(coin);
+    if (cfg.capital) setCapital(cfg.capital);
+    if (cfg.freqId) setFreqId(cfg.freqId);
+    if (cfg.months) setMonths(cfg.months);
+    if (cfg.targetPct) setTargetPct(cfg.targetPct);
+    setAdvanced(a => ({
+      ...a,
+      feePct: cfg.feePct ?? 0, feeFixed: cfg.feeFixed ?? 0,
+      slippagePct: cfg.slippagePct ?? 0, hybridPct: cfg.hybridPct ?? 30,
+    }));
+    track("public_plan_viewed", { coin: coin.id });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publicMode, coinsApi.coins]);
+
+  const exitPublicMode = () => {
+    window.history.pushState({}, "", "/");
+    setPublicRecord(null); publicAutoRan.current = false;
+    setSelected(null); simApi.reset();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleRevokePublic = async () => {
+    const ok = await revokePlan(publicPlanId).catch(() => false);
+    if (ok) exitPublicMode();
+  };
+
   const config = useMemo(() => ({
     capital: Number(capital) || 500, freqId, months: safeMo, targetPct,
     feePct: advanced.feePct, feeFixed: advanced.feeFixed,
     slippagePct: advanced.slippagePct, hybridPct: advanced.hybridPct,
   }), [capital, freqId, safeMo, targetPct, advanced]);
+
+  useEffect(() => {
+    if (!publicMode || publicAutoRan.current) return;
+    if (selected && market.history && simApi.simState === "idle") {
+      publicAutoRan.current = true;
+      simApi.run({ selected, history: market.history, mode: "scenario", config, backtestOffsetDays: 0 });
+    }
+  }, [publicMode, selected, market.history, simApi, config]);
+
 
   const backtestOffsetDays = backtestOffsetMonths * 30;
   const maxHistoryDays = market.history?.prices?.length || 0;
@@ -205,7 +267,40 @@ export default function App() {
           </Suspense>
         )}
 
+        {/* public /plan/<id> notices */}
+        {publicPlanId && publicRecord === "missing" && (
+          <div role="status" style={{ background: T.card2, borderRadius: 16, padding: "12px 16px", marginBottom: 16, ...body }}>
+            That shared plan doesn't exist or was removed by its creator — build your own below.
+          </div>
+        )}
+        {publicPlanId && publicRecord === "unavailable" && (
+          <div role="status" style={{ background: T.card2, borderRadius: 16, padding: "12px 16px", marginBottom: 16, ...body }}>
+            Public plan links aren't available on this deployment — build your own plan below.
+          </div>
+        )}
+
+        {/* public plan page */}
+        {publicMode && (
+          <Suspense fallback={null}>
+            <PublicPlanView
+              record={publicRecord} selected={selected}
+              canRevoke={!!getToken(publicPlanId)}
+              onRevoke={handleRevokePublic}
+              onBuildYourOwn={exitPublicMode}
+            />
+          </Suspense>
+        )}
+        {publicMode && simApi.simState !== "done" && (
+          <Section ariaLabel="Loading shared plan">
+            <ProgressLoading
+              label={simApi.simState === "running" ? simApi.simMsg : "Loading live market data…"}
+              progress={simApi.simState === "running" ? 70 : 35}
+            />
+          </Section>
+        )}
+
         {/* hero */}
+        {!publicMode && (
         <div style={{ marginBottom: 36 }}>
           <h1 style={{ fontFamily: SANS, fontSize: "clamp(27px,5.4vw,40px)", fontWeight: 700, color: T.ink, margin: 0, lineHeight: 1.18, letterSpacing: "-0.02em" }}>
             Build a crypto DCA plan.<br /><span style={{ color: T.blue }}>Stress-test it against real data.</span>
@@ -214,8 +309,10 @@ export default function App() {
             Pick a coin, set your plan, test scenarios. A decision tool — not a prediction.
           </p>
         </div>
+        )}
 
         {/* STEP 1 — coin */}
+        {!publicMode && (
         <Section label="Step 1 · Choose your coin" eyebrow ariaLabel="Step 1: choose your coin">
           {coinsApi.loading ? (
             <ProgressLoading label="Loading top 250 coins…" progress={coinsApi.progress} />
@@ -230,8 +327,10 @@ export default function App() {
             </div>
           )}
         </Section>
+        )}
 
         {/* STEP 2 — plan */}
+        {!publicMode && (
         <Section label="Step 2 · Build your plan" eyebrow ariaLabel="Step 2: build your plan">
           <CapitalInput capital={capital} onChange={setCapital} />
           <FrequencySelector freqId={freqId} months={safeMo} onChange={setFreqId} />
@@ -278,9 +377,10 @@ export default function App() {
 
           <SchedulePreview selected={selected} capital={config.capital} freqId={freqId} months={safeMo} targetPct={targetPct} mode={mode} />
         </Section>
+        )}
 
         {/* simulate — the primary action */}
-        {selected && market.history && (
+        {!publicMode && selected && market.history && (
           <div style={{ margin: "22px 0 4px" }}>
             <button onClick={handleSim} disabled={!canSimulate} style={{
               ...btnPrimary,

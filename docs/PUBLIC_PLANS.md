@@ -16,7 +16,7 @@ A shared plan is a URL hash: `https://<host>/#p=<base64url(JSON)>`.
 - Revocation: nothing is stored, so there is nothing to revoke — a link simply
   encodes parameters, like a calculator permalink.
 
-## Future `/plan/<id>` short links (requires a datastore — NOT built)
+## `/plan/<id>` short links — IMPLEMENTED (JSON-file store)
 
 Goal: `cmvng.app/plan/x7Kf2` renders a public page with the plan, key result,
 assumptions, model version, CMVNG branding, and a "build your own plan" CTA.
@@ -44,3 +44,21 @@ assumptions, model version, CMVNG branding, and a "build your own plan" CTA.
 Chosen not to build now: every option (Vercel KV, Upstash, a tiny D1/SQLite)
 adds a paid/provisioned dependency the owner must consciously adopt. The hash
 link delivers the shareable-URL feature today with zero infrastructure.
+
+
+## Implementation status (2026-08-27)
+
+Built in `api/plans.js` (node-only JSON-file KV, atomic writes, sha256-hashed
+owner tokens, validated configs, 10 creates/IP/hour, 5000-plan cap), served by
+`server.js` and the vite dev middleware; client in `src/lib/planApi.js`
+(localStorage token vault `cmv_plan_tokens`); read-only page header in
+`src/components/PublicPlanView.jsx`; SPA route wired in `App.jsx`
+(`/plan/<id>` → fetch → apply config → auto-simulate → revoke for owners).
+Covered by 9 unit tests + a Playwright lifecycle e2e (create → view →
+auto-run → revoke → honest 404).
+
+**One config step to persist plans in production:** the store writes to
+`PLANS_DIR` (default `./node_modules/.cache/cmvng-plans`, ephemeral on
+Railway). Attach a volume mounted at `/data` and set `PLANS_DIR=/data`.
+On static Vercel hosting the endpoint does not exist; the UI detects this and
+falls back to hash links with an honest notice.

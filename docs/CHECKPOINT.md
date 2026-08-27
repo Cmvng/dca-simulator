@@ -121,3 +121,21 @@ the engine is frozen and guarded by `behaviorLock.test.js` + the v1 oracle (31 t
   docs/PUBLIC_PLANS.md (/plan/<id> architecture), security-audit greps clean.
 - Every gate ran build + lint + 31/31 tests + 13/13 smoke; final QA: zero horizontal overflow at
   320/360/390/430/768/1024/1440, no console errors, bundle ~73.7KB gzip main + lazy chunks.
+
+---
+
+## CLEAR BLUE finishing run (same day; branch feat/cmvng-clear-blue → merged)
+
+- Full re-skin to DESIGN.md "CLEAR BLUE" (instrument look retired): #EEF3FA
+  backdrop, floating white cards, Plus Jakarta Sans 400-700, pill chips, one
+  #2E6BF0 accent, hero numeral + delta badge, scenario stress-test bars
+  (loss/amber/flat/blue-target/green-upside), three-cell robustness, mascot
+  placeholder asset used only in empty states / share-card avatar + corner.
+- Remaining work closed: /plan/<id> public pages IMPLEMENTED (see
+  docs/PUBLIC_PLANS.md — one config step: PLANS_DIR=/data + volume);
+  GitHub Actions CI (lint+test+build); legacy theme bridge removed;
+  integer-money raised as docs/MCR-001 (open, engine unchanged);
+  performance measured (localhost preview): LCP 136ms, interactive ~151ms,
+  card generation 353ms, simulate→chart 1.43s (~1.2s deliberate staging).
+- Tests now 40/40 (31 + 9 plan-store); gates A/B/C all green (lint, tests,
+  build, 13/13 smoke, public-plan lifecycle e2e, 320-1440px no overflow).

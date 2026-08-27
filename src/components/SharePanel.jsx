@@ -7,6 +7,7 @@ import { T, SANS, inp, section, body, btnPrimary, btnSecondary, btnOption } from
 import { SectionLabel, Spinner } from "./ui.jsx";
 import { makeCard, CARD_FORMATS, CARD_CONTENTS } from "../lib/sharing/shareCard.js";
 import { planShareUrl } from "../lib/planUrl.js";
+import { publishPlan } from "../lib/planApi.js";
 import { track } from "../lib/analytics.js";
 
 export default function SharePanel({ selected, sim, targetPct, months, freqLabel, analysis, livePrice, onSavePlan, onNewPlan, onCompareCoin, planSaved }) {
@@ -18,6 +19,9 @@ export default function SharePanel({ selected, sim, targetPct, months, freqLabel
   const [cardUrl, setCardUrl] = useState(null);
   const [copied, setCopied] = useState(false);
   const [shared, setShared] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [pubUrl, setPubUrl] = useState(null);
+  const [pubMsg, setPubMsg] = useState(null);
 
   const realityOk = !!sim?.reality?.ok;
 
@@ -64,6 +68,30 @@ export default function SharePanel({ selected, sim, targetPct, months, freqLabel
     window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(shareUrl)}`, "_blank", "noopener");
     setShared(true);
     track("share_clicked", { channel: "x" });
+  };
+
+  // Server-stored short link (/plan/<id>). Config only — never personal data.
+  const publishLink = async () => {
+    if (publishing) return;
+    setPublishing(true); setPubMsg(null);
+    try {
+      const r = await publishPlan({
+        coinId: selected.id, capital: sim.config.capital, freqId: sim.config.freqId,
+        months, targetPct, feePct: sim.config.feePct, feeFixed: sim.config.feeFixed,
+        slippagePct: sim.config.slippagePct, hybridPct: sim.config.hybridPct, mode: "scenario",
+      });
+      if (r?.unavailable) {
+        setPubMsg("Public links need the CMVNG server — the copy-link button below still works everywhere.");
+      } else {
+        setPubUrl(r.url); setShared(true);
+        try { await navigator.clipboard.writeText(r.url); setPubMsg("Public link copied — you can remove it any time from this browser."); }
+        catch { setPubMsg(r.url); }
+        track("share_clicked", { channel: "public_link" });
+      }
+    } catch (e) {
+      setPubMsg(e.message || "Could not create a public link right now.");
+    }
+    setPublishing(false);
   };
 
   const nativeShare = async () => {
@@ -149,8 +177,16 @@ export default function SharePanel({ selected, sim, targetPct, months, freqLabel
         {cardUrl && <button onClick={download} style={smallBtn}>Download image</button>}
         <button onClick={shareX} style={smallBtn}>Share on X</button>
         <button onClick={copyLink} style={smallBtn}>{copied ? "Copied" : "Copy plan link"}</button>
+        <button onClick={publishLink} disabled={publishing} style={{ ...smallBtn, color: pubUrl ? T.ink3 : T.blue }}>
+          {publishing ? "Creating link…" : pubUrl ? "Public link created" : "Create public link"}
+        </button>
         {typeof navigator !== "undefined" && navigator.share && <button onClick={nativeShare} style={smallBtn}>Share…</button>}
       </div>
+      {pubMsg && (
+        <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 500, color: T.ink2, marginBottom: 8, wordBreak: "break-all" }}>
+          {pubMsg}
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button onClick={onSavePlan} disabled={planSaved}
