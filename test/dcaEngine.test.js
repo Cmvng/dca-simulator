@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import {
   assessMarketData,
   buildDcaPlan,
+  buildDcaPlans,
   calculateAtr,
+  createValuationScales,
   normalizeCandles,
+  projectValuationAtPrice,
 } from "../src/lib/onchain/dcaEngine.js";
 import { formatPercent, formatPrice, formatTokenAmount, formatUsd } from "../src/lib/onchain/formatters.js";
 
@@ -46,6 +49,42 @@ function makeShortDailyCandles() {
       volume: 25_000 + ((index % 3) * 1_000),
     };
   });
+}
+
+function makeProfileCandles(count = 180) {
+  return Array.from({ length: count }, (_, index) => {
+    const close = 1 + (index * 0.002);
+    return {
+      time: 1_750_000_000 + (index * 14_400),
+      open: close * 0.999,
+      high: close * 1.006,
+      low: close * 0.994,
+      close,
+      volume: 25_000 + ((index % 4) * 1_000),
+    };
+  });
+}
+
+function profileArgs(overrides = {}) {
+  const candles = overrides.candles || makeProfileCandles();
+  return {
+    candles,
+    market: {
+      priceUsd: candles.at(-1).close,
+      liquidityUsd: 750_000,
+      volume24h: 400_000,
+      ...overrides.market,
+    },
+    capital: overrides.capital ?? 500,
+    durationDays: overrides.durationDays ?? 30,
+    targetPct: Object.hasOwn(overrides, "targetPct") ? overrides.targetPct : null,
+    expectedIntervalSeconds: overrides.expectedIntervalSeconds ?? 14_400,
+    dataAsOf: overrides.dataAsOf || new Date(candles.at(-1).time * 1000).toISOString(),
+  };
+}
+
+function assertNearlyEqual(actual, expected, tolerance = 1e-8) {
+  assert.ok(Math.abs(actual - expected) <= tolerance, `${actual} should be within ${tolerance} of ${expected}`);
 }
 
 test("normalizes, sorts, and deduplicates valid candles", () => {
@@ -268,6 +307,202 @@ test("distinguishes unavailable volume from observed zero volume", () => {
   assert.ok(!unavailable.warnings.some(warning => /very low 24-hour volume/i.test(warning)));
   assert.ok(observedZero.warnings.some(warning => /very low 24-hour volume/i.test(warning)));
   assert.ok(unavailable.score > observedZero.score);
+});
+
+test("builds three distinct selectable DCA profiles from one evidence set", () => {
+  const result = buildDcaPlans(profileArgs());
+
+  assert.equal(result.schemaVersion, 2);
+  assert.equal(result.selectedProfileId, "balanced");
+  assert.deepEqual(result.profiles.map(profile => profile.profileId), [
+    "cautious",
+    "balanced",
+    "aggressive",
+  ]);
+  assert.ok(result.profiles.every(profile => profile.quality.canPlan));
+  assert.ok(result.profiles.every(profile => profile.legs.length === 4));
+  assert.deepEqual(result.profiles.map(profile => profile.legs.map(leg => leg.allocationPct)), [
+    [10, 15, 25, 50],
+    [15, 20, 25, 40],
+    [35, 30, 20, 15],
+  ]);
+
+  const [cautious, balanced, aggressive] = result.profiles;
+  assert.ok(cautious.legs[0].midpoint < balanced.legs[0].midpoint);
+  assert.ok(balanced.legs[0].midpoint < aggressive.legs[0].midpoint);
+  assert.ok(result.profiles.every(profile => profile.legs.every(
+    (leg, index) => index === 0 || leg.midpoint < profile.legs[index - 1].midpoint,
+  )));
+});
+
+test("every DCA profile allocates the user's budget to the cent", () => {
+  for (const capital of [100.01, 500.03, 12_345.67]) {
+    const result = buildDcaPlans(profileArgs({ capital }));
+    for (const profile of result.profiles) {
+      const allocatedCents = profile.legs.reduce(
+        (sum, leg) => sum + Math.round(leg.amountUsd * 100),
+        0,
+      );
+      assert.equal(allocatedCents, Math.round(capital * 100));
+    }
+  }
+});
+
+test("automatic targets vary by profile while a user target overrides all three", () => {
+  const automatic = buildDcaPlans(profileArgs({ targetPct: null }));
+  const automaticTargets = automatic.profiles.map(profile => profile.targetPct);
+
+  assert.ok(automaticTargets[0] <= automaticTargets[1]);
+  assert.ok(automaticTargets[1] <= automaticTargets[2]);
+  assert.ok(automaticTargets.every(target => target % 5 === 0));
+  assert.ok(automatic.profiles.every(profile => profile.targetSource === "volatility"));
+
+  const overridden = buildDcaPlans(profileArgs({ targetPct: 37 }));
+  assert.deepEqual(overridden.profiles.map(profile => profile.targetPct), [37, 37, 37]);
+  assert.ok(overridden.profiles.every(profile => profile.targetSource === "user"));
+  assert.ok(overridden.profiles.every(profile => (
+    Math.abs(profile.targetPrice - (profile.weightedAverageEntry * 1.37)) < 1e-12
+  )));
+});
+
+test("duration controls the monitoring window and volatility outlook without moving buy zones", () => {
+  const sevenDays = buildDcaPlans(profileArgs({ durationDays: 7 }));
+  const ninetyDays = buildDcaPlans(profileArgs({ durationDays: 90 }));
+
+  assert.ok(ninetyDays.volatilityOutlook.horizonRangePct > sevenDays.volatilityOutlook.horizonRangePct);
+  assert.deepEqual(
+    sevenDays.profiles.map(profile => profile.legs.map(leg => leg.midpoint)),
+    ninetyDays.profiles.map(profile => profile.legs.map(leg => leg.midpoint)),
+  );
+  assert.equal(sevenDays.monitoringWindow.predictsBuyDates, false);
+  assert.equal(sevenDays.monitoringWindow.triggerType, "price-zone");
+  assert.equal(
+    Date.parse(sevenDays.monitoringWindow.reviewAt) - Date.parse(sevenDays.monitoringWindow.startsAt),
+    7 * 86_400_000,
+  );
+  assert.equal(buildDcaPlans(profileArgs({ durationDays: 1 })).durationDays, 7);
+  assert.equal(buildDcaPlans(profileArgs({ durationDays: 999 })).durationDays, 90);
+});
+
+test("projects every buy, target, and reassessment into verified market cap and FDV", () => {
+  const candles = makeProfileCandles();
+  const currentPrice = candles.at(-1).close;
+  const marketCapMultiplier = 500_000;
+  const fdvMultiplier = 1_200_000;
+  const result = buildDcaPlans(profileArgs({
+    candles,
+    market: {
+      priceUsd: currentPrice,
+      marketCapUsd: currentPrice * marketCapMultiplier,
+      fdvUsd: currentPrice * fdvMultiplier,
+    },
+  }));
+  const plan = result.profiles[1];
+  const leg = plan.legs[0];
+
+  assert.equal(result.valuationScales.marketCap.available, true);
+  assert.equal(result.valuationScales.fdv.available, true);
+  assertNearlyEqual(leg.valuation.lower.marketCapUsd, leg.lower * marketCapMultiplier);
+  assertNearlyEqual(leg.valuation.upper.fdvUsd, leg.upper * fdvMultiplier);
+  assertNearlyEqual(plan.target.valuation.marketCapUsd, plan.targetPrice * marketCapMultiplier);
+  assertNearlyEqual(plan.reassessment.valuation.fdvUsd, plan.invalidationPrice * fdvMultiplier);
+
+  const projected = projectValuationAtPrice(
+    currentPrice / 2,
+    createValuationScales({
+      marketCapUsd: currentPrice * marketCapMultiplier,
+      fdvUsd: currentPrice * fdvMultiplier,
+    }, currentPrice),
+  );
+  assertNearlyEqual(projected.marketCapUsd, (currentPrice * marketCapMultiplier) / 2);
+  assertNearlyEqual(projected.fdvUsd, (currentPrice * fdvMultiplier) / 2);
+});
+
+test("never fabricates market cap or FDV projections when provider values are unavailable", () => {
+  const missing = buildDcaPlans(profileArgs({
+    market: { marketCapUsd: null, fdvUsd: 0 },
+  }));
+  const leg = missing.profiles[1].legs[0];
+
+  assert.equal(missing.valuationScales.marketCap.available, false);
+  assert.equal(missing.valuationScales.fdv.available, false);
+  assert.equal(leg.valuation.lower.marketCapUsd, null);
+  assert.equal(leg.valuation.lower.fdvUsd, null);
+  assert.equal(missing.profiles[1].target.valuation.marketCapUsd, null);
+  assert.equal(missing.profiles[1].reassessment.valuation.fdvUsd, null);
+});
+
+test("reassessment and fill-scenario math reconcile to the full DCA plan", () => {
+  const result = buildDcaPlans(profileArgs({ capital: 500.03, targetPct: 50 }));
+
+  for (const profile of result.profiles) {
+    assert.ok(profile.invalidationPrice < profile.legs.at(-1).lower);
+    assert.equal(profile.reassessment.automaticOrder, false);
+    assert.equal(profile.reassessment.action, "reassess-or-exit");
+    assertNearlyEqual(profile.reassessment.valueUsd, profile.totalTokens * profile.invalidationPrice);
+    assertNearlyEqual(profile.reassessment.pnlUsd, profile.reassessment.valueUsd - profile.budget);
+    assertNearlyEqual(
+      profile.reassessment.pnlPct,
+      ((profile.reassessment.valueUsd / profile.budget) - 1) * 100,
+    );
+    assertNearlyEqual(
+      profile.reassessment.capitalAtRiskUsd,
+      Math.max(0, profile.budget - profile.reassessment.valueUsd),
+    );
+
+    assert.equal(profile.fillScenarios.length, 4);
+    profile.fillScenarios.forEach((scenario, index) => {
+      const expectedCents = profile.legs.slice(0, index + 1).reduce(
+        (sum, leg) => sum + Math.round(leg.amountUsd * 100),
+        0,
+      );
+      assert.equal(Math.round(scenario.investedUsd * 100), expectedCents);
+      assert.equal(
+        Math.round((scenario.investedUsd + scenario.unusedBudgetUsd) * 100),
+        Math.round(profile.budget * 100),
+      );
+      assertNearlyEqual(scenario.averageEntry, scenario.investedUsd / scenario.tokenAmount);
+    });
+    const fullFill = profile.fillScenarios.at(-1);
+    assertNearlyEqual(fullFill.tokenAmount, profile.totalTokens);
+    assertNearlyEqual(fullFill.averageEntry, profile.weightedAverageEntry);
+    assertNearlyEqual(fullFill.targetPrice, profile.targetPrice);
+  }
+});
+
+test("blocked evidence keeps all three profile choices visible but disabled", () => {
+  const candles = makeShortDailyCandles().slice(0, 19);
+  const result = buildDcaPlans({
+    candles,
+    market: {
+      priceUsd: candles.at(-1).close,
+      liquidityUsd: 750_000,
+      volume24h: 400_000,
+    },
+    expectedIntervalSeconds: 86_400,
+    dataAsOf: new Date(candles.at(-1).time * 1000).toISOString(),
+  });
+
+  assert.equal(result.quality.canPlan, false);
+  assert.equal(result.profiles.length, 3);
+  assert.ok(result.profiles.every(profile => profile.mode === "blocked"));
+  assert.ok(result.profiles.every(profile => profile.legs.length === 0));
+  assert.ok(result.profiles.every(profile => profile.target === null));
+});
+
+test("extreme volatility outlook stays finite and above zero", () => {
+  const candles = makeProfileCandles().map(candle => ({
+    ...candle,
+    high: candle.close * 1.8,
+    low: candle.close * 0.2,
+  }));
+  const result = buildDcaPlans(profileArgs({ candles, durationDays: 90 }));
+
+  assert.equal(result.volatilityOutlook.horizonRangePct, 300);
+  assert.ok(result.volatilityOutlook.lower.priceUsd > 0);
+  assert.ok(result.volatilityOutlook.lower.priceUsd < result.volatilityOutlook.current.priceUsd);
+  assert.ok(result.volatilityOutlook.upper.priceUsd > result.volatilityOutlook.current.priceUsd);
+  assert.ok(result.profiles.every(profile => Number.isFinite(profile.reassessment.price)));
 });
 
 test("formatters keep unavailable provider values distinct from zero", () => {

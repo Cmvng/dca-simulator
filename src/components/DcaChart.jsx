@@ -10,6 +10,7 @@ import {
   ColorType,
   CrosshairMode,
   createChart,
+  createSeriesMarkers,
   HistogramSeries,
   LineStyle,
   TrackingModeExitMode,
@@ -27,7 +28,7 @@ const COLORS = {
   negative: T.loss,
   dca: T.blue,
   average: "#D6DEEC",
-  target: "#087A4A",
+  target: "#D86B16",
   invalidation: "#C92A1A",
 };
 
@@ -42,6 +43,19 @@ const PRICE_KEYS = [
 const LEG_KEYS = ["legs", "entries", "dcaLegs", "levels", "buyZones", "zones"];
 const MAX_PRICE_DECIMALS = 18;
 const MAX_ACCESSIBLE_CANDLES = 50;
+const VALUE_MODES = new Set(["price", "marketCap", "fdv"]);
+
+const VALUE_MODE_LABELS = {
+  price: "Price",
+  marketCap: "Market cap",
+  fdv: "FDV",
+};
+
+const VALUE_MODE_SHORT_LABELS = {
+  price: "USD",
+  marketCap: "MCAP",
+  fdv: "FDV",
+};
 
 function asFiniteNumber(value) {
   if (value && typeof value === "object") {
@@ -356,6 +370,103 @@ function formatPrice(value) {
   })}`;
 }
 
+function formatValuation(value) {
+  if (!Number.isFinite(value)) return "—";
+  const absolute = Math.abs(value);
+  if (absolute < 10_000) return formatPrice(value);
+  return `${value < 0 ? "−" : ""}$${new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 2,
+  }).format(absolute)}`;
+}
+
+function valuationScaleFor({
+  requestedMode,
+  currentPrice,
+  valuationScales,
+  currentMarketCap,
+  currentFdv,
+}) {
+  if (requestedMode === "price") return 1;
+  if (!(currentPrice > 0)) return null;
+
+  const directValue = requestedMode === "marketCap"
+    ? asFiniteNumber(currentMarketCap)
+    : asFiniteNumber(currentFdv);
+  if (directValue > 0) return directValue / currentPrice;
+
+  const suppliedScale = valuationScales?.[requestedMode];
+  const multiplier = asFiniteNumber(
+    suppliedScale?.multiplier ?? suppliedScale?.scale ?? suppliedScale
+  );
+  if (suppliedScale?.available === false || !(multiplier > 0)) return null;
+  return multiplier;
+}
+
+function scaleCandle(candle, multiplier) {
+  return {
+    ...candle,
+    open: candle.open * multiplier,
+    high: candle.high * multiplier,
+    low: candle.low * multiplier,
+    close: candle.close * multiplier,
+  };
+}
+
+function scalePlan(plan, multiplier) {
+  const scale = value => value > 0 ? value * multiplier : value;
+  return {
+    ...plan,
+    currentPrice: scale(plan.currentPrice),
+    weightedAverage: scale(plan.weightedAverage),
+    target: scale(plan.target),
+    invalidation: scale(plan.invalidation),
+    legs: plan.legs.map(leg => ({
+      ...leg,
+      price: scale(leg.price),
+      lower: scale(leg.lower),
+      upper: scale(leg.upper),
+    })),
+  };
+}
+
+function illustrativeEventOrder(event) {
+  const buy = String(event.markerId || "").match(/^B(\d+)$/i);
+  if (buy) return Number(buy[1]);
+  if (event.markerId === "S1") return 50;
+  if (event.markerId === "X1") return 60;
+  return 70;
+}
+
+function illustrativeMarker(event) {
+  const markerId = String(event.markerId || "?").toUpperCase();
+  const isBuy = /^B\d+$/.test(markerId);
+  const isTarget = markerId === "S1";
+  const isRisk = markerId === "X1";
+
+  return {
+    id: event.id,
+    time: event.time,
+    price: event.price,
+    position: isBuy ? "atPriceBottom" : "atPriceTop",
+    shape: isBuy ? "arrowUp" : isTarget ? "arrowDown" : "square",
+    color: isBuy
+      ? COLORS.positive
+      : isTarget
+        ? COLORS.target
+        : isRisk
+          ? COLORS.invalidation
+          : "#D89A17",
+    text: isBuy
+      ? `+${markerId}`
+      : isTarget
+        ? `−${markerId} REF`
+        : isRisk
+          ? `!${markerId} CLOSE`
+          : `?${markerId}`,
+  };
+}
+
 function formatVolume(value) {
   if (!Number.isFinite(value) || value <= 0) return "—";
   return new Intl.NumberFormat("en-US", {
@@ -408,7 +519,7 @@ const COMPONENT_CSS = `
   .cmvng-dca-chart__eyebrow {
     color: ${COLORS.muted};
     display: block;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: .12em;
     margin-bottom: 3px;
@@ -461,6 +572,14 @@ const COMPONENT_CSS = `
     position: absolute;
     z-index: 2;
   }
+  .cmvng-dca-chart__execution-overlay::before {
+    border-left: 1px dashed rgba(174, 182, 199, .30);
+    bottom: 16px;
+    content: "";
+    left: 20px;
+    position: absolute;
+    top: 16px;
+  }
   .cmvng-dca-chart__buy-band {
     background: linear-gradient(90deg, rgba(46, 107, 240, .06), rgba(46, 107, 240, .17));
     border-bottom: 1px solid rgba(100, 149, 255, .42);
@@ -472,20 +591,36 @@ const COMPONENT_CSS = `
   }
   .cmvng-dca-chart__buy-badge,
   .cmvng-dca-chart__level-badge {
+    align-items: center;
+    background: rgba(7, 10, 18, .92);
     border-radius: 5px;
-    color: #fff;
-    font: 800 10px/1 ${SANS};
+    display: inline-flex;
+    gap: 5px;
+    font: 800 11px/1 ${SANS};
     letter-spacing: .035em;
-    padding: 5px 6px;
+    left: 8px;
+    padding: 3px 6px 3px 2px;
     position: absolute;
-    right: 6px;
     white-space: nowrap;
   }
   .cmvng-dca-chart__buy-badge {
-    background: #2E6BF0;
-    box-shadow: 0 3px 10px rgba(46, 107, 240, .28);
+    border: 1px solid rgba(18, 183, 106, .52);
+    box-shadow: 0 3px 10px rgba(18, 183, 106, .18);
+    color: #94EBC0;
     top: 50%;
     transform: translateY(-50%);
+  }
+  .cmvng-dca-chart__action-glyph {
+    align-items: center;
+    background: ${COLORS.background};
+    border: 2px solid currentColor;
+    border-radius: 50%;
+    display: inline-flex;
+    font-size: 12px;
+    height: 20px;
+    justify-content: center;
+    line-height: 1;
+    width: 20px;
   }
   .cmvng-dca-chart__level-marker {
     border-top: 1px dashed var(--marker-color);
@@ -495,7 +630,8 @@ const COMPONENT_CSS = `
     top: 0;
   }
   .cmvng-dca-chart__level-badge {
-    background: var(--marker-color);
+    border: 1px solid var(--marker-color);
+    color: var(--marker-color);
     top: 0;
     transform: translateY(-50%);
   }
@@ -503,22 +639,18 @@ const COMPONENT_CSS = `
   .cmvng-dca-chart__level-marker--risk { --marker-color: ${COLORS.invalidation}; }
   .cmvng-dca-chart__tooltip {
     background: rgba(16, 21, 34, .88);
-    border: 1px solid rgba(139, 147, 167, .16);
-    border-radius: 9px;
+    border-bottom: 1px solid rgba(139, 147, 167, .16);
+    border-top: 1px solid rgba(139, 147, 167, .16);
     color: #C9CFDB;
-    font-size: 10px;
+    font-size: 11px;
     font-variant-numeric: tabular-nums;
-    left: 12px;
     line-height: 1.45;
-    max-width: calc(100% - 98px);
+    min-height: 34px;
     overflow: hidden;
-    padding: 6px 8px;
+    padding: 8px 12px;
     pointer-events: none;
-    position: absolute;
     text-overflow: ellipsis;
-    top: 8px;
     white-space: nowrap;
-    z-index: 4;
   }
   .cmvng-dca-chart__reset {
     align-items: center;
@@ -598,7 +730,7 @@ const COMPONENT_CSS = `
     color: #AEB6C7;
     display: inline-flex;
     flex: 0 0 auto;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     gap: 6px;
     letter-spacing: .02em;
@@ -611,12 +743,42 @@ const COMPONENT_CSS = `
   }
   .cmvng-dca-chart__key-line--dashed { border-top-style: dashed; }
   .cmvng-dca-chart__key-line--dotted { border-top-style: dotted; }
+  .cmvng-dca-chart__key--illustrative .cmvng-dca-chart__action-glyph {
+    color: #D89A17;
+    font-size: 11px;
+    height: 17px;
+    width: 17px;
+  }
+  .cmvng-dca-chart__touch-notice {
+    align-items: flex-start;
+    background: rgba(216, 154, 23, .08);
+    border-top: 1px solid rgba(216, 154, 23, .20);
+    color: #D5BE89;
+    display: flex;
+    font-size: 11px;
+    gap: 7px;
+    line-height: 1.45;
+    padding: 8px 12px;
+  }
+  .cmvng-dca-chart__touch-notice strong {
+    color: #F0D89D;
+    flex: 0 0 auto;
+  }
+  .cmvng-dca-chart__value-notice {
+    background: rgba(46, 107, 240, .07);
+    border-top: 1px solid rgba(46, 107, 240, .18);
+    color: #AEB9D2;
+    font-size: 11px;
+    line-height: 1.45;
+    padding: 7px 12px;
+  }
+  .cmvng-dca-chart__value-notice strong { color: #D6DEEC; }
   .cmvng-dca-chart__attribution {
     align-items: center;
     border-top: 1px solid rgba(34, 42, 59, .48);
     color: #8B93A7;
     display: flex;
-    font-size: 9px;
+    font-size: 11px;
     justify-content: space-between;
     line-height: 1.4;
     padding: 6px 12px 7px;
@@ -639,9 +801,11 @@ const COMPONENT_CSS = `
     .cmvng-dca-chart { border-radius: 18px; }
     .cmvng-dca-chart__head { min-height: 67px; padding-inline: 13px; }
     .cmvng-dca-chart__stage { height: clamp(330px, 46vh, 470px); }
-    .cmvng-dca-chart__tooltip { left: 8px; max-width: calc(100% - 62px); white-space: normal; }
+    .cmvng-dca-chart__tooltip { white-space: normal; }
     .cmvng-dca-chart__reset { min-height: 44px; padding: 0 9px; right: 8px; }
     .cmvng-dca-chart__reset span { display: none; }
+    .cmvng-dca-chart__touch-notice { display: block; }
+    .cmvng-dca-chart__touch-notice strong { display: block; margin-bottom: 2px; }
     .cmvng-dca-chart__attribution { align-items: flex-start; flex-direction: column; gap: 2px; }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -655,6 +819,10 @@ const COMPONENT_CSS = `
  * Expected normalized inputs:
  * - candles: [{ time|timestamp, open, high, low, close, volume }]
  * - plan: { legs: [{ price, allocationPct }], weightedAverage, target, invalidation }
+ * - valueMode: price | marketCap | fdv, with an engine valuationScales object (either
+ *   passed directly or attached to plan) or the matching current valuation prop.
+ * - illustrativeEvents: historical intersections from buildIllustrativePlanTouches;
+ *   these are always rendered as illustrative, non-executed markers.
  *
  * Common aliases and GeckoTerminal OHLCV tuples are accepted defensively, but provider
  * response normalization should still live in the API/client layer.
@@ -664,6 +832,12 @@ export default function DcaChart({
   plan = null,
   tokenSymbol,
   symbol,
+  valueMode = "price",
+  valuationScales = null,
+  currentMarketCap = null,
+  currentFdv = null,
+  showIllustrativeTouches = false,
+  illustrativeEvents = [],
   loading = false,
   error = null,
 }) {
@@ -674,6 +848,7 @@ export default function DcaChart({
   const chartRef = useRef(null);
   const candleSeriesRef = useRef(null);
   const volumeSeriesRef = useRef(null);
+  const illustrativeMarkersRef = useRef(null);
   const autoscaleRangeRef = useRef(null);
   const priceLinesRef = useRef(new Map());
   const executionOverlayRef = useRef(null);
@@ -685,15 +860,91 @@ export default function DcaChart({
   const previousDatasetRef = useRef(null);
 
   const displaySymbol = String(tokenSymbol || symbol || "TOKEN").toUpperCase();
-  const normalizedCandles = useMemo(() => normalizeCandles(candles), [candles]);
+  const priceCandles = useMemo(() => normalizeCandles(candles), [candles]);
+  const normalizedPricePlan = useMemo(() => normalizePlan(plan), [plan]);
+  const latestPriceCandle = priceCandles.at(-1) || null;
+  const referencePrice = normalizedPricePlan.currentPrice > 0
+    ? normalizedPricePlan.currentPrice
+    : latestPriceCandle?.close ?? null;
+  const requestedValueMode = VALUE_MODES.has(valueMode) ? valueMode : "price";
+  const resolvedValuationScales = valuationScales || plan?.valuationScales || null;
+  const requestedMultiplier = useMemo(
+    () => valuationScaleFor({
+      requestedMode: requestedValueMode,
+      currentPrice: referencePrice,
+      valuationScales: resolvedValuationScales,
+      currentMarketCap,
+      currentFdv,
+    }),
+    [
+      currentFdv,
+      currentMarketCap,
+      referencePrice,
+      requestedValueMode,
+      resolvedValuationScales,
+    ]
+  );
+  const activeValueMode = requestedMultiplier > 0 ? requestedValueMode : "price";
+  const valueMultiplier = activeValueMode === requestedValueMode ? requestedMultiplier : 1;
+  const valueModeFallback = requestedValueMode !== activeValueMode;
+  const valueModeLabel = VALUE_MODE_LABELS[activeValueMode];
+  const valueModeShortLabel = VALUE_MODE_SHORT_LABELS[activeValueMode];
+  const normalizedCandles = useMemo(
+    () => priceCandles.map(candle => scaleCandle(candle, valueMultiplier)),
+    [priceCandles, valueMultiplier]
+  );
+  const normalizedPlan = useMemo(
+    () => scalePlan(normalizedPricePlan, valueMultiplier),
+    [normalizedPricePlan, valueMultiplier]
+  );
   const accessibleCandles = useMemo(
     () => normalizedCandles.slice(-MAX_ACCESSIBLE_CANDLES),
     [normalizedCandles],
   );
-  const normalizedPlan = useMemo(() => normalizePlan(plan), [plan]);
   const latestCandle = normalizedCandles.at(-1) || null;
   const currentPrice =
     normalizedPlan.currentPrice > 0 ? normalizedPlan.currentPrice : latestCandle?.close ?? null;
+
+  const displayIllustrativeEvents = useMemo(() => {
+    if (!showIllustrativeTouches || !Array.isArray(illustrativeEvents)) return [];
+    const candlesByTime = new Map(priceCandles.map(candle => [candle.time, candle]));
+
+    return illustrativeEvents
+      .flatMap((event, index) => {
+        const time = normalizeTime(event?.time ?? event?.timestamp ?? event?.date);
+        const candle = candlesByTime.get(time);
+        if (!candle) return [];
+        const eventPrice = firstFinite(event?.price, event?.value, candle.close);
+        if (!(eventPrice > 0)) return [];
+        const markerId = String(event?.markerId ?? event?.levelId ?? event?.id ?? `event-${index + 1}`)
+          .replace(/^illustrative-/i, "")
+          .toUpperCase();
+
+        return [{
+          ...event,
+          id: String(event?.id ?? `illustrative-${markerId}-${time}-${index}`),
+          markerId,
+          time,
+          price: eventPrice * valueMultiplier,
+          label: String(event?.label ?? `${markerId} level touch`),
+          detail: String(
+            event?.detail
+            ?? "This historical candle intersected a current plan level. It is not an executed trade."
+          ),
+          illustrative: true,
+          executed: false,
+          backtest: false,
+        }];
+      })
+      .sort((left, right) =>
+        (left.time - right.time) || (illustrativeEventOrder(left) - illustrativeEventOrder(right))
+      );
+  }, [illustrativeEvents, priceCandles, showIllustrativeTouches, valueMultiplier]);
+
+  const nativeIllustrativeMarkers = useMemo(
+    () => displayIllustrativeEvents.map(illustrativeMarker),
+    [displayIllustrativeEvents]
+  );
 
   const numericLevels = useMemo(
     () =>
@@ -715,6 +966,7 @@ export default function DcaChart({
   const chartPriceFormatter = useCallback(
     (value) => {
       if (!Number.isFinite(value)) return "—";
+      if (activeValueMode !== "price") return formatValuation(value);
       const absolute = Math.abs(value);
       if (absolute !== 0 && absolute < 1e-8) return `$${value.toExponential(3)}`;
       if (absolute >= 1) return formatPrice(value);
@@ -723,7 +975,7 @@ export default function DcaChart({
         maximumFractionDigits: decimals,
       })}`;
     },
-    [decimals]
+    [activeValueMode, decimals]
   );
 
   const desiredLines = useMemo(() => {
@@ -732,7 +984,7 @@ export default function DcaChart({
     if (currentPrice > 0) {
       lines.push({
         key: "current",
-        type: "Current price",
+        type: `Current ${valueModeLabel.toLowerCase()}`,
         price: currentPrice,
         allocation: null,
         options: {
@@ -742,7 +994,7 @@ export default function DcaChart({
           lineWidth: 2,
           lineStyle: LineStyle.Solid,
           axisLabelVisible: true,
-          title: "CURRENT",
+          title: activeValueMode === "price" ? "CURRENT" : `CURRENT ${valueModeShortLabel}`,
         },
       });
     }
@@ -753,7 +1005,7 @@ export default function DcaChart({
       const markerId = markerIdForLeg(leg, index);
       lines.push({
         key: `dca-${leg.id}-${index}`,
-        type: `${markerId} potential buy zone`,
+        type: `${markerId} potential buy zone (${valueModeLabel})`,
         price: leg.price,
         allocation: leg.allocationPct,
         markerId,
@@ -763,7 +1015,7 @@ export default function DcaChart({
           color: COLORS.dca,
           lineWidth: 2,
           lineStyle: LineStyle.Dotted,
-          axisLabelVisible: true,
+          axisLabelVisible: false,
           title: `${markerId} ·${allocationLabel}`,
         },
       });
@@ -772,7 +1024,9 @@ export default function DcaChart({
     if (normalizedPlan.weightedAverage > 0) {
       lines.push({
         key: "weighted-average",
-        type: "Average entry after all planned buys fill",
+        type: activeValueMode === "price"
+          ? "Average entry after all planned buys fill"
+          : `Implied ${valueModeLabel.toLowerCase()} at the average entry`,
         price: normalizedPlan.weightedAverage,
         allocation: null,
         options: {
@@ -781,8 +1035,8 @@ export default function DcaChart({
           color: COLORS.average,
           lineWidth: 2,
           lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: "AVG ENTRY",
+          axisLabelVisible: false,
+          title: activeValueMode === "price" ? "AVG ENTRY" : `AVG ${valueModeShortLabel}`,
         },
       });
     }
@@ -790,7 +1044,7 @@ export default function DcaChart({
     if (normalizedPlan.target > 0) {
       lines.push({
         key: "target",
-        type: "S1 conditional target",
+        type: `S1 conditional target reference after all planned fills; no sell allocation is modeled (${valueModeLabel})`,
         price: normalizedPlan.target,
         allocation: null,
         markerId: "S1",
@@ -800,17 +1054,16 @@ export default function DcaChart({
           color: COLORS.target,
           lineWidth: 2,
           lineStyle: LineStyle.LargeDashed,
-          axisLabelVisible: true,
-          title: `S1 · +${normalizedPlan.targetPct?.toFixed(0) || "?"}%`,
+          axisLabelVisible: false,
+          title: `S1 TARGET REF · +${normalizedPlan.targetPct?.toFixed(0) || "?"}%`,
         },
       });
     }
 
     if (normalizedPlan.invalidation > 0) {
-      const isReference = normalizedPlan.mode === "volatility-reference";
       lines.push({
         key: "invalidation",
-        type: isReference ? "X1 scenario-floor reassessment" : "X1 structural reassessment",
+        type: `X1 manual reassessment only after a selected-timeframe candle CLOSES below X1; a wick does not count, and no automatic stop or sale is modeled (${valueModeLabel})`,
         price: normalizedPlan.invalidation,
         allocation: null,
         markerId: "X1",
@@ -820,14 +1073,14 @@ export default function DcaChart({
           color: COLORS.invalidation,
           lineWidth: 2,
           lineStyle: LineStyle.SparseDotted,
-          axisLabelVisible: true,
-          title: "X1 · REASSESS",
+          axisLabelVisible: false,
+          title: "X1 · CLOSE BELOW → REASSESS",
         },
       });
     }
 
     return lines;
-  }, [currentPrice, normalizedPlan]);
+  }, [activeValueMode, currentPrice, normalizedPlan, valueModeLabel, valueModeShortLabel]);
 
   const updateTooltip = useCallback((candle) => {
     if (!tooltipRef.current || !candle) return;
@@ -845,6 +1098,7 @@ export default function DcaChart({
     if (!series || !overlay || !currentPlan) return;
     const priceScaleWidth = chartRef.current?.priceScale("right").width() || 76;
     overlay.style.right = `${priceScaleWidth + 1}px`;
+    const railItems = [];
 
     currentPlan.legs.forEach((leg, index) => {
       const markerId = markerIdForLeg(leg, index);
@@ -859,6 +1113,8 @@ export default function DcaChart({
       node.hidden = false;
       node.style.top = `${Math.min(upperY, lowerY)}px`;
       node.style.height = `${Math.max(3, Math.abs(lowerY - upperY))}px`;
+      const badge = node.querySelector(".cmvng-dca-chart__buy-badge");
+      if (badge) railItems.push({ badge, anchorY: (upperY + lowerY) / 2 });
     });
 
     [
@@ -874,6 +1130,40 @@ export default function DcaChart({
       }
       node.hidden = false;
       node.style.transform = `translateY(${y}px)`;
+      const badge = node.querySelector(".cmvng-dca-chart__level-badge");
+      if (badge) railItems.push({ badge, anchorY: y });
+    });
+
+    const minimumGap = 30;
+    const railPadding = 22;
+    const maximumY = Math.max(railPadding, overlay.clientHeight - railPadding);
+    const positioned = railItems
+      .filter(item => Number.isFinite(item.anchorY))
+      .sort((left, right) => left.anchorY - right.anchorY)
+      .map(item => ({ ...item, displayY: Math.min(maximumY, Math.max(railPadding, item.anchorY)) }));
+
+    for (let index = 1; index < positioned.length; index += 1) {
+      positioned[index].displayY = Math.max(
+        positioned[index].displayY,
+        positioned[index - 1].displayY + minimumGap,
+      );
+    }
+    if (positioned.at(-1)?.displayY > maximumY) {
+      positioned[positioned.length - 1].displayY = maximumY;
+      for (let index = positioned.length - 2; index >= 0; index -= 1) {
+        positioned[index].displayY = Math.min(
+          positioned[index].displayY,
+          positioned[index + 1].displayY - minimumGap,
+        );
+      }
+    }
+    if (positioned[0]?.displayY < railPadding) {
+      const shift = railPadding - positioned[0].displayY;
+      positioned.forEach(item => { item.displayY += shift; });
+    }
+    positioned.forEach(item => {
+      const offset = item.displayY - item.anchorY;
+      item.badge.style.transform = `translateY(calc(-50% + ${offset.toFixed(1)}px))`;
     });
   }, []);
 
@@ -1015,6 +1305,10 @@ export default function DcaChart({
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
+    illustrativeMarkersRef.current = createSeriesMarkers(candleSeries, [], {
+      autoScale: false,
+      zOrder: "top",
+    });
 
     const onCrosshairMove = (param) => {
       const candle = param.seriesData?.get(candleSeries);
@@ -1055,6 +1349,8 @@ export default function DcaChart({
       chartContainer.removeEventListener("touchmove", onChartInteraction);
       resizeObserver?.disconnect();
       if (annotationFrameRef.current) cancelAnimationFrame(annotationFrameRef.current);
+      illustrativeMarkersRef.current?.detach();
+      illustrativeMarkersRef.current = null;
       chart.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
@@ -1104,7 +1400,7 @@ export default function DcaChart({
     const count = normalizedCandles.length;
     const interval = count > 1 ? normalizedCandles[1].time - normalizedCandles[0].time : 0;
     const nextDataset = {
-      symbol: displaySymbol,
+      symbol: `${displaySymbol}:${activeValueMode}`,
       count,
       interval,
       firstTime: normalizedCandles[0]?.time ?? null,
@@ -1128,7 +1424,11 @@ export default function DcaChart({
     previousDatasetRef.current = nextDataset;
     if (shouldFit) requestAnimationFrame(fitChart);
     else scheduleAnnotationLayout();
-  }, [chartPriceFormatter, decimals, displaySymbol, fitChart, latestCandle, normalizedCandles, scheduleAnnotationLayout, updateTooltip]);
+  }, [activeValueMode, chartPriceFormatter, decimals, displaySymbol, fitChart, latestCandle, normalizedCandles, scheduleAnnotationLayout, updateTooltip]);
+
+  useEffect(() => {
+    illustrativeMarkersRef.current?.setMarkers(nativeIllustrativeMarkers);
+  }, [nativeIllustrativeMarkers]);
 
   useEffect(() => {
     const series = candleSeriesRef.current;
@@ -1169,7 +1469,7 @@ export default function DcaChart({
 
   const errorMessage = messageFromError(error);
   const state = loading ? "loading" : errorMessage ? "error" : latestCandle ? "ready" : "empty";
-  const chartLabel = `${displaySymbol} candlestick chart with ${normalizedCandles.length} real OHLCV candles and ${normalizedPlan.legs.length} ${normalizedPlan.mode === "volatility-reference" ? "volatility reference" : "DCA entry"} levels.`;
+  const chartLabel = `${displaySymbol} real price candlestick chart ${activeValueMode === "price" ? "shown in price" : `scaled to implied ${valueModeLabel} using the current supply ratio`}, with ${normalizedCandles.length} OHLCV candles and ${normalizedPlan.legs.length} ${normalizedPlan.mode === "volatility-reference" ? "volatility reference" : "DCA entry"} levels. S1 is a conditional target reference after all planned fills; no sell allocation is modeled. X1 calls for manual reassessment only after a selected-timeframe candle closes below X1; a wick does not count, and X1 is not an automatic stop or executed sale.${displayIllustrativeEvents.length ? ` ${displayIllustrativeEvents.length} retrospective in-sample level intersections are marked as illustrative and non-executed.` : ""}`;
 
   return (
     <section className="cmvng-dca-chart" aria-labelledby={`${summaryId}-title`}>
@@ -1177,8 +1477,12 @@ export default function DcaChart({
 
       <header className="cmvng-dca-chart__head">
         <div className="cmvng-dca-chart__identity">
-          <span className="cmvng-dca-chart__eyebrow">Real pool OHLCV · B1–B4 / S1 map</span>
-          <h2 className="cmvng-dca-chart__symbol">{displaySymbol} / USD</h2>
+          <span className="cmvng-dca-chart__eyebrow">
+            {activeValueMode === "price" ? "Real pool price OHLCV" : `Real price OHLCV · implied ${valueModeShortLabel}`} · B1–B4 / S1 target ref / X1 close-below reassess
+          </span>
+          <h4 id={`${summaryId}-title`} className="cmvng-dca-chart__symbol">
+            {displaySymbol} / {valueModeShortLabel}
+          </h4>
         </div>
         <div className="cmvng-dca-chart__quote">
           <strong className="cmvng-dca-chart__price">
@@ -1186,7 +1490,11 @@ export default function DcaChart({
           </strong>
           <span className="cmvng-dca-chart__source">
             {state === "ready" && <span className="cmvng-dca-chart__source-dot" />}
-            {state === "ready" ? `${normalizedCandles.length} candles` : "Waiting for data"}
+            {state === "ready"
+              ? valueModeFallback
+                ? `${VALUE_MODE_SHORT_LABELS[requestedValueMode]} unavailable · price shown`
+                : `${normalizedCandles.length} candles · ${valueModeLabel}`
+              : "Waiting for data"}
           </span>
         </div>
       </header>
@@ -1213,7 +1521,8 @@ export default function DcaChart({
                 hidden
               >
                 <span className="cmvng-dca-chart__buy-badge">
-                  {markerId} · {leg.allocationPct !== null ? `${leg.allocationPct.toFixed(0)}%` : "BUY"}
+                  <span className="cmvng-dca-chart__action-glyph">+</span>
+                  {markerId} · {leg.allocationPct !== null ? `${leg.allocationPct.toFixed(0)}%` : "PLAN"}
                 </span>
               </div>
             );
@@ -1225,7 +1534,8 @@ export default function DcaChart({
               hidden
             >
               <span className="cmvng-dca-chart__level-badge">
-                S1 · +{normalizedPlan.targetPct?.toFixed(0) || "?"}%
+                <span className="cmvng-dca-chart__action-glyph">−</span>
+                S1 · TARGET REF
               </span>
             </div>
           )}
@@ -1235,14 +1545,12 @@ export default function DcaChart({
               data-marker-id="X1"
               hidden
             >
-              <span className="cmvng-dca-chart__level-badge">X1 · REASSESS</span>
+              <span className="cmvng-dca-chart__level-badge">
+                <span className="cmvng-dca-chart__action-glyph">!</span>
+                X1 · CLOSE BELOW → REASSESS
+              </span>
             </div>
           )}
-        </div>
-        <div ref={tooltipRef} className="cmvng-dca-chart__tooltip" aria-hidden="true">
-          {latestCandle
-            ? `${formatTime(latestCandle.time)} UTC · OHLCV`
-            : "Move across the chart to inspect OHLCV"}
         </div>
         <button
           type="button"
@@ -1290,6 +1598,38 @@ export default function DcaChart({
         )}
       </div>
 
+      <div ref={tooltipRef} className="cmvng-dca-chart__tooltip" aria-hidden="true">
+        {latestCandle
+          ? `${formatTime(latestCandle.time)} UTC · OHLCV`
+          : "Move across the chart to inspect OHLCV"}
+      </div>
+
+      {valueModeFallback && (
+        <div className="cmvng-dca-chart__value-notice" role="note">
+          <strong>{VALUE_MODE_LABELS[requestedValueMode]} is unavailable.</strong>{" "}
+          The chart stayed in price mode; no other valuation was substituted.
+        </div>
+      )}
+      {!valueModeFallback && activeValueMode !== "price" && (
+        <div className="cmvng-dca-chart__value-notice" role="note">
+          <strong>Implied {valueModeLabel}.</strong>{" "}
+          Values use the current valuation-to-price ratio and assume constant token supply.
+        </div>
+      )}
+      {showIllustrativeTouches && (
+        <div className="cmvng-dca-chart__touch-notice" role="note">
+          <strong>Illustrative historical touches</strong>
+          <span>
+            Today&apos;s selected plan levels are projected retrospectively onto the same past candles used to build the plan
+            {displayIllustrativeEvents.length
+              ? ` (${displayIllustrativeEvents.length} level ${displayIllustrativeEvents.length === 1 ? "touch" : "touches"}).`
+              : "; no qualifying level touches were found."}{" "}
+            The levels were not known then. These in-sample markers are not fills, executed trades, or a backtest.
+            S1 remains a conditional target reference with no modeled sell allocation. X1 requires a selected-timeframe candle CLOSE below X1 before manual reassessment; a wick does not count, and X1 is not an automatic stop or executed sale.
+          </span>
+        </div>
+      )}
+
       <div className="cmvng-dca-chart__legend" role="group" aria-label="Chart line legend">
         {normalizedPlan.legs.length > 0 && (
           <span className="cmvng-dca-chart__key">
@@ -1315,7 +1655,7 @@ export default function DcaChart({
               className="cmvng-dca-chart__key-line cmvng-dca-chart__key-line--dashed"
               style={{ "--key-color": COLORS.target }}
             />
-            S1 conditional target
+            S1 conditional target reference after all planned fills · no sell allocation modeled
           </span>
         )}
         {normalizedPlan.invalidation > 0 && (
@@ -1324,7 +1664,13 @@ export default function DcaChart({
               className="cmvng-dca-chart__key-line cmvng-dca-chart__key-line--dotted"
               style={{ "--key-color": COLORS.invalidation }}
             />
-            X1 reassess level
+            X1: selected-timeframe candle CLOSE below level → manual reassessment · wick does not count · no automatic stop or executed sale
+          </span>
+        )}
+        {showIllustrativeTouches && (
+          <span className="cmvng-dca-chart__key cmvng-dca-chart__key--illustrative">
+            <span className="cmvng-dca-chart__action-glyph">↳</span>
+            Retrospective in-sample intersection · not executed
           </span>
         )}
         {!normalizedPlan.legs.length && (
@@ -1344,12 +1690,16 @@ export default function DcaChart({
       </footer>
 
       <div id={summaryId} className="cmvng-dca-chart__sr-only">
-        <h3 id={`${summaryId}-title`}>{displaySymbol} accessible chart data</h3>
+        <p><strong>{displaySymbol} accessible chart data</strong></p>
         <p id={`${summaryId}-description`}>
-          This historical chart contains {normalizedCandles.length} real OHLCV candles. The current
-          pool reference is {currentPrice > 0 ? formatPrice(currentPrice) : "not available"}. It includes{" "}
+          This historical chart contains {normalizedCandles.length} real OHLCV candles and is shown
+          in {valueModeLabel}. The current pool reference is {currentPrice > 0 ? chartPriceFormatter(currentPrice) : "not available"}. It includes{" "}
           {normalizedPlan.legs.length} potential {normalizedPlan.mode === "volatility-reference" ? "volatility reference" : "DCA entry"} levels. These levels are simulations, not
-          guaranteed entries or returns.
+          guaranteed entries or returns. {activeValueMode !== "price"
+            ? `The implied ${valueModeLabel.toLowerCase()} values assume a constant token supply.`
+            : ""} {valueModeFallback
+              ? `${VALUE_MODE_LABELS[requestedValueMode]} was unavailable, so the chart safely fell back to price without substituting another valuation.`
+              : ""}
         </p>
 
         {desiredLines.length > 0 && (
@@ -1358,7 +1708,7 @@ export default function DcaChart({
             <thead>
               <tr>
                 <th scope="col">Level</th>
-                <th scope="col">Price</th>
+                <th scope="col">{valueModeLabel}</th>
                 <th scope="col">Allocation</th>
               </tr>
             </thead>
@@ -1366,7 +1716,7 @@ export default function DcaChart({
               {desiredLines.map((line) => (
                 <tr key={line.key}>
                   <th scope="row">{line.type}</th>
-                  <td>{formatPrice(line.price)}</td>
+                  <td>{chartPriceFormatter(line.price)}</td>
                   <td>
                     {line.allocation !== null ? `${line.allocation.toFixed(1)} percent` : "Not applicable"}
                   </td>
@@ -1376,18 +1726,43 @@ export default function DcaChart({
           </table>
         )}
 
+        {showIllustrativeTouches && (
+          <section aria-labelledby={`${summaryId}-illustrative-events`}>
+            <h4 id={`${summaryId}-illustrative-events`}>Illustrative historical level touches</h4>
+            <p>
+              The events below apply today&apos;s selected plan levels retrospectively to the same historical sample used to build the plan. The levels were not known then; these are
+              not fills, executed trades, or a backtest.
+            </p>
+            {displayIllustrativeEvents.length > 0 ? (
+              <ol>
+                {displayIllustrativeEvents.map(event => (
+                  <li key={event.id}>
+                    <time dateTime={new Date(event.time * 1000).toISOString()}>
+                      {formatTime(event.time)} UTC
+                    </time>{" "}
+                    — {event.label}, at {chartPriceFormatter(event.price)} in {valueModeLabel}.{" "}
+                    {event.detail} Illustrative only; not executed.
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p>No qualifying illustrative level touches were found.</p>
+            )}
+          </section>
+        )}
+
         {accessibleCandles.length > 0 && (
           <table>
             <caption>
-              Latest {accessibleCandles.length} of {normalizedCandles.length} OHLCV candles, oldest to newest
+              Latest {accessibleCandles.length} of {normalizedCandles.length} OHLCV candles in {valueModeLabel}, oldest to newest
             </caption>
             <thead>
               <tr>
                 <th scope="col">UTC time</th>
-                <th scope="col">Open</th>
-                <th scope="col">High</th>
-                <th scope="col">Low</th>
-                <th scope="col">Close</th>
+                <th scope="col">Open ({valueModeShortLabel})</th>
+                <th scope="col">High ({valueModeShortLabel})</th>
+                <th scope="col">Low ({valueModeShortLabel})</th>
+                <th scope="col">Close ({valueModeShortLabel})</th>
                 <th scope="col">Volume</th>
               </tr>
             </thead>
@@ -1399,10 +1774,10 @@ export default function DcaChart({
                       {formatTime(candle.time)} UTC
                     </time>
                   </th>
-                  <td>{formatPrice(candle.open)}</td>
-                  <td>{formatPrice(candle.high)}</td>
-                  <td>{formatPrice(candle.low)}</td>
-                  <td>{formatPrice(candle.close)}</td>
+                  <td>{chartPriceFormatter(candle.open)}</td>
+                  <td>{chartPriceFormatter(candle.high)}</td>
+                  <td>{chartPriceFormatter(candle.low)}</td>
+                  <td>{chartPriceFormatter(candle.close)}</td>
                   <td>{candle.volume.toLocaleString("en-US")}</td>
                 </tr>
               ))}

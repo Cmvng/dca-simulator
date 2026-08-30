@@ -98,7 +98,7 @@ await page.screenshot({ path: SCREENSHOT_DIR + "/desktop-results.png", fullPage:
 await step("backtest mode runs", async () => {
   await page.click('button:has-text("Historical backtest")');
   await page.click('button:has-text("Run Historical Backtest")');
-  await page.waitForFunction(() => document.body.innerText.toLowerCase().includes("what actually happened"), { timeout: 15000 });
+  await page.waitForFunction(() => document.body.innerText.toLowerCase().includes("modeled on historical prices"), { timeout: 15000 });
 });
 
 await page.screenshot({ path: SCREENSHOT_DIR + "/desktop-backtest.png" });

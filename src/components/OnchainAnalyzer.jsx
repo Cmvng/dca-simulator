@@ -1,8 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DcaChart from "./DcaChart.jsx";
 import ExecutionMap from "./ExecutionMap.jsx";
-import { buildDcaPlan } from "../lib/onchain/dcaEngine.js";
-import { compactAddress, formatPercent, formatPrice, formatTokenAmount, formatUsd } from "../lib/onchain/formatters.js";
+import OnchainSharePanel from "./OnchainSharePanel.jsx";
+import PlanOutcome from "./PlanOutcome.jsx";
+import PlanProfileSelector from "./PlanProfileSelector.jsx";
+import { buildDcaPlans, DCA_PROFILES } from "../lib/onchain/dcaEngine.js";
+import {
+  buildIllustrativePlanTouches,
+} from "../lib/onchain/planTouches.js";
+import { compactAddress, formatPercent, formatPrice, formatUsd } from "../lib/onchain/formatters.js";
 import { getPoolCandles, resolveContract } from "../services/onchainApi.js";
 import { LogoMark } from "./ui.jsx";
 import "../onchain.css";
@@ -15,11 +21,13 @@ const TIMEFRAMES = [
   { id: "1d", label: "1D", ariaLabel: "1 day candles", timeframe: "day", aggregate: 1, seconds: 86_400, limit: 500 },
 ];
 
-const ANALYSIS_TABS = [
-  ["plan", "DCA Plan"],
-  ["safety", "Safety limits"],
-  ["market", "Market Data"],
+const VALUE_MODES = [
+  { id: "price", label: "Price" },
+  { id: "marketCap", label: "MCAP" },
+  { id: "fdv", label: "FDV" },
 ];
+const TARGET_OPTIONS = [25, 50, 100, 200];
+const DURATION_OPTIONS = [7, 14, 30, 45, 60, 90];
 
 const NETWORK_NAMES = {
   eth: "Ethereum",
@@ -33,25 +41,51 @@ const NETWORK_NAMES = {
   avax: "Avalanche",
 };
 
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
 function readAnalyzerQuery() {
-  if (typeof window === "undefined") return { address: "", pool: "", timeframe: "4h" };
+  if (typeof window === "undefined") {
+    return { address: "", pool: "", timeframe: "4h", amount: 500, duration: 30, profile: "balanced", unit: "marketCap", target: "auto", touches: false };
+  }
   const params = new URLSearchParams(window.location.search);
   const requestedTimeframe = params.get("interval") || "4h";
+  const requestedProfile = params.get("plan") || "balanced";
+  const requestedUnit = params.get("unit") || "marketCap";
+  const targetParam = params.get("target") || "auto";
+  const amountParam = params.get("amount");
+  const durationParam = params.get("duration");
+  const parsedAmount = amountParam === null ? NaN : Number(amountParam);
+  const parsedDuration = durationParam === null ? NaN : Number(durationParam);
+  const parsedTarget = Number(targetParam);
   return {
     address: params.get("address") || "",
     pool: params.get("pool") || "",
     timeframe: TIMEFRAMES.some(item => item.id === requestedTimeframe) ? requestedTimeframe : "4h",
+    amount: Number.isFinite(parsedAmount) && parsedAmount > 0 ? clamp(parsedAmount, 1, 10_000_000) : 500,
+    duration: Number.isFinite(parsedDuration) ? Math.round(clamp(parsedDuration, 7, 90)) : 30,
+    profile: DCA_PROFILES.some(item => item.id === requestedProfile) ? requestedProfile : "balanced",
+    unit: VALUE_MODES.some(item => item.id === requestedUnit) ? requestedUnit : "marketCap",
+    target: targetParam === "auto" || !Number.isFinite(parsedTarget) ? "auto" : String(clamp(parsedTarget, 5, 500)),
+    touches: params.get("touches") === "1",
   };
 }
 
-function syncAnalyzerUrl({ address, asset, timeframeId }) {
+function syncAnalyzerUrl({ address, asset, timeframeId, capital, reviewDays, profileId, valueMode, targetChoice, showTouches }) {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
-  if (address) url.searchParams.set("address", address);
-  else url.searchParams.delete("address");
-  if (asset) url.searchParams.set("pool", `${asset.network}:${asset.poolAddress}`);
-  else url.searchParams.delete("pool");
-  url.searchParams.set("interval", timeframeId);
+  const setOrDelete = (key, value) => {
+    if (value === null || value === undefined || value === "") url.searchParams.delete(key);
+    else url.searchParams.set(key, String(value));
+  };
+  setOrDelete("address", address);
+  setOrDelete("pool", asset ? `${asset.network}:${asset.poolAddress}` : "");
+  setOrDelete("interval", timeframeId);
+  setOrDelete("amount", capital);
+  setOrDelete("duration", reviewDays);
+  setOrDelete("plan", profileId);
+  setOrDelete("unit", valueMode);
+  setOrDelete("target", targetChoice);
+  setOrDelete("touches", showTouches ? "1" : "");
   window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
@@ -86,6 +120,30 @@ function formatAgeHours(hours) {
   return formatHistorySpan(hours / 24);
 }
 
+function formatUtcDate(value) {
+  const timestamp = Date.parse(value || "");
+  if (!Number.isFinite(timestamp)) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(timestamp));
+}
+
+function valueFromProjection(projection, valueMode) {
+  if (!projection) return null;
+  if (valueMode === "marketCap") return projection.marketCapUsd;
+  if (valueMode === "fdv") return projection.fdvUsd;
+  return projection.priceUsd;
+}
+
+function formatProjectedValue(projection, valueMode) {
+  const value = valueFromProjection(projection, valueMode);
+  if (!Number.isFinite(Number(value)) || Number(value) <= 0) return "Unavailable";
+  return valueMode === "price" ? formatPrice(value) : formatUsd(value, { compact: true });
+}
+
 function RiskMeter({ quality }) {
   const tone = quality.canPlan
     ? quality.score >= 78 ? "good" : quality.score >= 55 ? "warn" : "danger"
@@ -111,7 +169,8 @@ function RiskMeter({ quality }) {
 }
 
 export default function OnchainAnalyzer() {
-  const [address, setAddress] = useState(() => readAnalyzerQuery().address);
+  const initialQuery = useMemo(() => readAnalyzerQuery(), []);
+  const [address, setAddress] = useState(initialQuery.address);
   const [asset, setAsset] = useState(null);
   const [poolOptions, setPoolOptions] = useState([]);
   const [resolveState, setResolveState] = useState("idle");
@@ -122,12 +181,14 @@ export default function OnchainAnalyzer() {
   const [candleRequestVersion, setCandleRequestVersion] = useState(0);
   const [resolvedAt, setResolvedAt] = useState(null);
   const [candlesAt, setCandlesAt] = useState(null);
-  const [timeframeId, setTimeframeId] = useState(() => readAnalyzerQuery().timeframe);
-  const [capital, setCapital] = useState(500);
-  const [capitalInput, setCapitalInput] = useState("500");
-  const [targetPct, setTargetPct] = useState(50);
-  const [reviewDays, setReviewDays] = useState(30);
-  const [activeTab, setActiveTab] = useState("plan");
+  const [timeframeId, setTimeframeId] = useState(initialQuery.timeframe);
+  const [capital, setCapital] = useState(initialQuery.amount);
+  const [capitalInput, setCapitalInput] = useState(String(initialQuery.amount));
+  const [reviewDays, setReviewDays] = useState(initialQuery.duration);
+  const [selectedProfileId, setSelectedProfileId] = useState(initialQuery.profile);
+  const [valueMode, setValueMode] = useState(initialQuery.unit);
+  const [targetChoice, setTargetChoice] = useState(initialQuery.target);
+  const [showIllustrativeTouches, setShowIllustrativeTouches] = useState(initialQuery.touches);
   const [copied, setCopied] = useState(false);
   const resolveController = useRef(null);
   const candleController = useRef(null);
@@ -141,38 +202,70 @@ export default function OnchainAnalyzer() {
     [timeframeId],
   );
   const market = useMemo(() => asset?.market || {}, [asset?.market]);
-  const plan = useMemo(
-    () => buildDcaPlan({
+  const planSet = useMemo(
+    () => buildDcaPlans({
       candles,
       market,
       capital,
-      targetPct,
+      durationDays: reviewDays,
+      targetPct: targetChoice === "auto" ? null : Number(targetChoice),
       expectedIntervalSeconds: timeframe.seconds,
       dataAsOf: candlesAt,
     }),
-    [candles, candlesAt, market, capital, targetPct, timeframe.seconds],
+    [candles, candlesAt, market, capital, reviewDays, targetChoice, timeframe.seconds],
   );
-  const reviewBy = useMemo(() => {
-    const observedAt = Date.parse(candlesAt || "");
-    const start = Number.isFinite(observedAt) ? observedAt : Date.now();
-    return new Intl.DateTimeFormat("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      timeZone: "UTC",
-    }).format(new Date(start + (reviewDays * 86_400_000)));
-  }, [candlesAt, reviewDays]);
+  const selectedPlan = useMemo(
+    () => planSet.profiles.find(item => item.profileId === selectedProfileId) || planSet.profiles[1] || planSet.profiles[0],
+    [planSet.profiles, selectedProfileId],
+  );
+  const selectedProfile = useMemo(
+    () => DCA_PROFILES.find(item => item.id === selectedPlan?.profileId) || DCA_PROFILES[1],
+    [selectedPlan?.profileId],
+  );
+  const illustrativeEvents = useMemo(
+    () => showIllustrativeTouches && selectedPlan?.quality?.canPlan
+      ? buildIllustrativePlanTouches({ candles, plan: selectedPlan })
+      : [],
+    [candles, selectedPlan, showIllustrativeTouches],
+  );
+  const reviewBy = formatUtcDate(planSet.monitoringWindow.reviewAt);
   const candleReady = candleState === "done";
   const candleLoading = candleState === "idle" || candleState === "loading";
+  const canShowPlan = candleReady && selectedPlan?.quality?.canPlan;
   const planHeading = candleLoading
     ? "Analyzing real pool candles"
     : candleState === "error"
       ? "Candle data unavailable"
-      : plan.mode === "blocked"
-        ? "Plan blocked — needs more evidence"
-        : plan.mode === "adaptive"
-          ? "Support-based buy ladder"
-          : "Volatility-reference ladder";
+      : selectedPlan.mode === "blocked"
+        ? "Plans need more evidence"
+        : `${selectedPlan.profileName} map ready`;
+
+  useEffect(() => {
+    if (!asset) return;
+    if (valueMode === "marketCap" && !planSet.valuationScales.marketCap.available) {
+      setValueMode("price");
+    } else if (valueMode === "fdv" && !planSet.valuationScales.fdv.available) {
+      setValueMode("price");
+    }
+  }, [asset, planSet.valuationScales, valueMode]);
+
+  useEffect(() => {
+    const canonicalAddress = asset?.token?.address
+      || (["loading", "error"].includes(resolveState) ? address.trim() : "");
+    if (!canonicalAddress) return;
+    if (resolveState === "idle" && initialQuery.address === address) return;
+    syncAnalyzerUrl({
+      address: canonicalAddress,
+      asset,
+      timeframeId,
+      capital,
+      reviewDays,
+      profileId: selectedProfileId,
+      valueMode,
+      targetChoice,
+      showTouches: showIllustrativeTouches,
+    });
+  }, [address, asset, capital, initialQuery.address, resolveState, reviewDays, selectedProfileId, showIllustrativeTouches, targetChoice, timeframeId, valueMode]);
 
   const cancelCurrentCandles = useCallback(() => {
     candleRequestId.current += 1;
@@ -202,7 +295,6 @@ export default function OnchainAnalyzer() {
     setAsset(null);
     setResolvedAt(null);
     setCandlesAt(null);
-    syncAnalyzerUrl({ address: value, asset: null, timeframeId });
 
     try {
       const payload = await resolveContract(value, { signal: controller.signal });
@@ -213,7 +305,6 @@ export default function OnchainAnalyzer() {
       setPoolOptions(options);
       setResolvedAt(payload.asOf || new Date().toISOString());
       setResolveState("done");
-      syncAnalyzerUrl({ address: value, asset: selected, timeframeId });
       window.setTimeout(() => {
         if (requestId !== resolveRequestId.current) return;
         resultsRef.current?.focus({ preventScroll: true });
@@ -224,11 +315,11 @@ export default function OnchainAnalyzer() {
       setResolveError(error.message || "The contract could not be resolved.");
       setResolveState("error");
     }
-  }, [address, cancelCurrentCandles, timeframeId]);
+  }, [address, cancelCurrentCandles]);
 
   useEffect(() => {
     if (initialUrlScanStarted.current) return;
-    const initialAddress = readAnalyzerQuery().address;
+    const initialAddress = initialQuery.address;
     if (!initialAddress) return;
     const timer = window.setTimeout(() => {
       if (initialUrlScanStarted.current) return;
@@ -236,7 +327,7 @@ export default function OnchainAnalyzer() {
       scan(initialAddress);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [scan]);
+  }, [initialQuery.address, scan]);
 
   useEffect(() => {
     if (!asset) return undefined;
@@ -300,13 +391,13 @@ export default function OnchainAnalyzer() {
       setCapital(1);
       return;
     }
-    const next = Math.min(10_000_000, Math.max(1, Number(nextInput) || 1));
+    const next = clamp(Number(nextInput) || 1, 1, 10_000_000);
     setCapitalInput(nextInput);
     setCapital(next);
   };
 
   const commitCapital = () => {
-    const next = Math.min(10_000_000, Math.max(1, Number(capitalInput) || 1));
+    const next = clamp(Number(capitalInput) || 1, 1, 10_000_000);
     setCapital(next);
     setCapitalInput(String(next));
   };
@@ -331,15 +422,13 @@ export default function OnchainAnalyzer() {
 
   const choosePool = event => {
     const next = poolOptions.find(option => `${option.network}:${option.poolAddress}` === event.target.value);
-    if (next) {
-      cancelCurrentCandles();
-      setCandles([]);
-      setCandlesAt(null);
-      setCandleError("");
-      setCandleState("loading");
-      setAsset(next);
-      syncAnalyzerUrl({ address: next.token.address, asset: next, timeframeId });
-    }
+    if (!next) return;
+    cancelCurrentCandles();
+    setCandles([]);
+    setCandlesAt(null);
+    setCandleError("");
+    setCandleState("loading");
+    setAsset(next);
   };
 
   const chooseTimeframe = id => {
@@ -350,7 +439,6 @@ export default function OnchainAnalyzer() {
     setCandleError("");
     setCandleState("loading");
     setTimeframeId(id);
-    if (asset) syncAnalyzerUrl({ address: asset.token.address, asset, timeframeId: id });
   };
 
   const retryCandles = () => {
@@ -362,20 +450,13 @@ export default function OnchainAnalyzer() {
     setCandleRequestVersion(version => version + 1);
   };
 
-  const onTabKeyDown = event => {
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-    event.preventDefault();
-    const current = ANALYSIS_TABS.findIndex(([id]) => id === activeTab);
-    const next = event.key === "Home"
-      ? 0
-      : event.key === "End"
-        ? ANALYSIS_TABS.length - 1
-        : (current + (event.key === "ArrowRight" ? 1 : -1) + ANALYSIS_TABS.length) % ANALYSIS_TABS.length;
-    const nextId = ANALYSIS_TABS[next][0];
-    setActiveTab(nextId);
-    document.getElementById(`analysis-tab-${nextId}`)?.focus();
+  const scrollTo = id => {
+    const destination = document.getElementById(id);
+    if (!destination) return;
+    destination.focus({ preventScroll: true });
+    destination.scrollIntoView({ behavior: "smooth", block: "start" });
   };
-
+  const currentProjection = planSet.volatilityOutlook.current;
   return (
     <div className="onchain-page">
       <header className="onchain-header">
@@ -384,318 +465,381 @@ export default function OnchainAnalyzer() {
           <span>cmvng</span>
         </a>
         <nav aria-label="Product mode">
-          <span>Contract analyzer</span>
+          <span>Contract DCA</span>
           <a href="/">Top 250 plans</a>
         </nav>
       </header>
+
       <main className="onchain-app">
-      <section className="contract-hero">
-        <div className="eyebrow"><span className="live-dot" /> Onchain DCA Lab</div>
-        <h1>Paste a memecoin contract.<br /><span>Map the risk before the buy.</span></h1>
-        <p>Real pool candles, liquidity checks and historical DCA references. No generated future candles.</p>
-
-        <form className="contract-form" onSubmit={scan}>
-          <label htmlFor="contract-address">Token contract or mint address</label>
-          <div className="contract-form__row">
-            <input
-              id="contract-address"
-              value={address}
-              onChange={event => setAddress(event.target.value)}
-              placeholder="0x… or a Solana mint address"
-              autoComplete="off"
-              spellCheck="false"
-            />
-            <button type="submit" disabled={resolveState === "loading" || !address.trim()}>
-              {resolveState === "loading" ? <><span className="button-spinner" /> Scanning</> : "Scan token"}
-            </button>
-          </div>
-          <div className="contract-form__meta">
-            <span>Auto-detects the indexed network and strongest exact-match pool.</span>
-            <span>Data via GeckoTerminal</span>
-          </div>
-        </form>
-
-        {resolveError && <div className="inline-alert inline-alert--danger" role="alert">{resolveError}</div>}
-        <div className="visually-hidden" role="status" aria-live="polite">
-          {resolveState === "loading"
-            ? "Resolving the contract and exact pools."
-            : candleState === "loading" && asset
-              ? `${asset.token.symbol || asset.token.name || "Token"} loaded from ${selectedNetwork}. Loading candles.`
-              : candleState === "done" && asset
-                ? plan.quality.canPlan
-                  ? `${plan.legs.length}-step ${plan.mode === "adaptive" ? "support-based" : "volatility-reference"} plan ready from ${plan.quality.candleCount} candles.`
-                  : `Market chart ready with ${plan.quality.candleCount} candles. DCA plan blocked pending more evidence.`
-              : ""}
-        </div>
-      </section>
-
-      {asset && (
-        <section className="token-workspace" ref={resultsRef} tabIndex={-1} aria-labelledby="onchain-token-title">
-          <div className="token-heading">
-            <div className="token-heading__identity">
-              <TokenLogo token={asset.token} />
-              <div>
-                <div className="token-title-row">
-                  <h2 id="onchain-token-title">{asset.token.symbol?.toUpperCase()}</h2>
-                  <span className="chain-pill">{selectedNetwork}</span>
-                </div>
-                <p>{asset.token.name}</p>
-                <button className="address-copy" type="button" onClick={copyAddress} aria-label="Copy token contract address">
-                  {compactAddress(asset.token.address, 9, 7)} <span aria-live="polite">{copied ? "Copied" : "Copy"}</span>
-                </button>
-              </div>
-            </div>
-            <div className="token-heading__price">
-              <strong>{formatPrice(market.priceUsd)}</strong>
-              <span className={hasDayChange ? (dayChange >= 0 ? "positive" : "negative") : ""}>
-                {hasDayChange ? `${dayChange >= 0 ? "▲" : "▼"} ${formatPercent(dayChange)} · 24h` : "24h change unavailable"}
-              </span>
-            </div>
-          </div>
-
-          <div className="metrics-strip" role="region" aria-label="Selected pool market metrics">
-            <Metric label="Market cap" value={market.marketCapUsd ? formatUsd(market.marketCapUsd, { compact: true }) : "Unverified"} />
-            <Metric label="Liquidity" value={formatUsd(market.liquidityUsd, { compact: true })} tone={market.liquidityUsd < 50_000 ? "warn" : ""} />
-            <Metric label="24h volume" value={formatUsd(market.volume24h, { compact: true })} />
-            <Metric label="FDV" value={formatUsd(market.fdvUsd, { compact: true })} />
-            <Metric label="24h trades" value={hasTrades ? `${buys} buys · ${sells} sells` : "—"} />
-            <Metric label="Pool" value={`${dexName} · ${asset.counterToken?.symbol || "?"}`} />
-          </div>
-
-          {poolOptions.length > 1 && (
-            <div className={`pool-selector ${uniqueNetworks.size > 1 ? "pool-selector--ambiguous" : ""}`}>
-              <div>
-                <label htmlFor="pool-source">Chart source</label>
-                <span>{uniqueNetworks.size > 1 ? "This address was found on multiple networks. Confirm the intended chain and pool." : "The highest-liquidity pool was selected automatically. You can change it."}</span>
-              </div>
-              <select id="pool-source" value={selectedPoolKey} onChange={choosePool}>
-                {poolOptions.map(option => {
-                  const optionDex = typeof option.dex === "string" ? option.dex : option.dex?.name || option.dex?.id || "DEX";
-                  const optionNetwork = NETWORK_NAMES[option.network] || option.network;
-                  return (
-                    <option key={`${option.network}:${option.poolAddress}`} value={`${option.network}:${option.poolAddress}`}>
-                      {optionNetwork} · {optionDex} · {option.counterToken?.symbol || "?"} · {compactAddress(option.poolAddress, 6, 4)} · {formatUsd(option.market?.liquidityUsd, { compact: true })}
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
+        <section className={`contract-hero ${asset ? "contract-hero--resolved" : ""}`}>
+          {!asset && (
+            <>
+              <div className="eyebrow"><span className="live-dot" /> Onchain DCA Lab</div>
+              <h1>Paste a memecoin contract.<br /><span>See the whole DCA map.</span></h1>
+              <p>Choose a plan, see every potential buy and exit zone, then share one clean card. No generated future candles.</p>
+            </>
           )}
 
-          <div className="workspace-grid">
-            <section className="chart-panel">
-              <div className="chart-panel__header">
-                <span>Chart interval</span>
-                <div className="timeframe-control" role="group" aria-label="Chart timeframe">
-                  {TIMEFRAMES.map(item => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={item.id === timeframeId ? "active" : ""}
-                      aria-pressed={item.id === timeframeId}
-                      aria-label={item.ariaLabel}
-                      title={item.title}
-                      onClick={() => chooseTimeframe(item.id)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
+          <form className="contract-form" onSubmit={scan}>
+            <label htmlFor="contract-address">Token contract or mint address</label>
+            <div className="contract-form__row">
+              <input
+                id="contract-address"
+                value={address}
+                onChange={event => setAddress(event.target.value)}
+                placeholder="0x… or a Solana mint address"
+                autoComplete="off"
+                spellCheck="false"
+              />
+              <button type="submit" disabled={resolveState === "loading" || !address.trim()}>
+                {resolveState === "loading" ? <><span className="button-spinner" /> Scanning</> : asset ? "Change token" : "Analyze token"}
+              </button>
+            </div>
+            {!asset && (
+              <div className="contract-form__meta">
+                <span>Exact contract match · strongest indexed pool selected</span>
+                <span>Market data via GeckoTerminal</span>
+              </div>
+            )}
+          </form>
+
+          {resolveError && <div className="inline-alert inline-alert--danger" role="alert">{resolveError}</div>}
+          <div className="visually-hidden" role="status" aria-live="polite">
+            {resolveState === "loading"
+              ? "Resolving the contract and exact pools."
+              : candleState === "done" && asset
+                  ? selectedPlan.quality.canPlan
+                    ? `Three DCA plans are ready from ${selectedPlan.quality.candleCount} candles.`
+                    : `Market chart ready with ${selectedPlan.quality.candleCount} candles. Plans need more evidence.`
+                  : ""}
+          </div>
+        </section>
+
+        {asset && (
+          <section className="token-workspace" ref={resultsRef} tabIndex={-1} aria-labelledby="onchain-token-title">
+            <div className="token-heading">
+              <div className="token-heading__identity">
+                <TokenLogo token={asset.token} />
+                <div>
+                  <div className="token-title-row">
+                    <h2 id="onchain-token-title">{asset.token.symbol?.toUpperCase()}</h2>
+                    <span className="chain-pill">{selectedNetwork}</span>
+                  </div>
+                  <p>{asset.token.name}</p>
+                  <button className="address-copy" type="button" onClick={copyAddress} aria-label="Copy token contract address">
+                    {compactAddress(asset.token.address, 9, 7)} <span aria-live="polite">{copied ? "Copied" : "Copy CA"}</span>
+                  </button>
                 </div>
               </div>
-              <DcaChart
-                candles={candles}
-                plan={candleReady ? plan : null}
-                symbol={asset.token.symbol}
-                loading={candleLoading}
-                error={candleError}
-              />
-              {candleReady && (
-                <ExecutionMap
-                  plan={plan}
-                  tokenSymbol={asset.token.symbol}
-                  reviewDays={reviewDays}
-                  reviewBy={reviewBy}
-                />
-              )}
-            </section>
+              <div className="token-heading__price">
+                <strong>{formatPrice(market.priceUsd)}</strong>
+                <span className={hasDayChange ? (dayChange >= 0 ? "positive" : "negative") : ""}>
+                  {hasDayChange ? `${dayChange >= 0 ? "▲" : "▼"} ${formatPercent(dayChange)} · 24h` : "24h change unavailable"}
+                </span>
+                {canShowPlan && <button type="button" className="token-card-link" onClick={() => scrollTo("share-plan-card")}>Customize share card</button>}
+              </div>
+            </div>
 
-            <aside className="strategy-panel">
-              <div className="strategy-panel__heading">
+            <div className="metrics-strip metrics-strip--key" role="region" aria-label="Selected pool market metrics">
+              <Metric label="Market cap" value={market.marketCapUsd ? formatUsd(market.marketCapUsd, { compact: true }) : "Unverified"} />
+              <Metric label="FDV" value={market.fdvUsd ? formatUsd(market.fdvUsd, { compact: true }) : "Unavailable"} />
+              <Metric label="Liquidity" value={formatUsd(market.liquidityUsd, { compact: true })} tone={market.liquidityUsd < 50_000 ? "warn" : ""} />
+              <Metric label="24h volume" value={formatUsd(market.volume24h, { compact: true })} />
+            </div>
+
+            <details className="market-source">
+              <summary>Market source · {dexName} / {asset.counterToken?.symbol || "?"}</summary>
+              <div className={`pool-selector ${uniqueNetworks.size > 1 ? "pool-selector--ambiguous" : ""}`}>
                 <div>
-                  <span>Plan settings · {timeframe.label} evidence</span>
+                  <label htmlFor="pool-source">Chart source</label>
+                  <span>{uniqueNetworks.size > 1 ? "This address appears on multiple networks. Confirm the intended pool." : "The highest-liquidity exact-match pool was selected automatically."}</span>
+                </div>
+                <select id="pool-source" value={selectedPoolKey} onChange={choosePool} disabled={poolOptions.length < 2}>
+                  {poolOptions.map(option => {
+                    const optionDex = typeof option.dex === "string" ? option.dex : option.dex?.name || option.dex?.id || "DEX";
+                    const optionNetwork = NETWORK_NAMES[option.network] || option.network;
+                    return (
+                      <option key={`${option.network}:${option.poolAddress}`} value={`${option.network}:${option.poolAddress}`}>
+                        {optionNetwork} · {optionDex} · {option.counterToken?.symbol || "?"} · {compactAddress(option.poolAddress, 6, 4)} · {formatUsd(option.market?.liquidityUsd, { compact: true })}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+            </details>
+
+            <section className="plan-studio" id="plan-builder" tabIndex={-1} aria-labelledby="plan-builder-title">
+              <header className="plan-studio__heading">
+                <div>
+                  <span>1 · Set the plan</span>
+                  <h3 id="plan-builder-title">How much, how long, and what risk style?</h3>
+                  <p>Price-trigger buys may never fill. Duration is the monitoring window, not a promised completion date.</p>
+                </div>
+                <span className="simulation-pill">Planned · not executed</span>
+              </header>
+
+              <div className="plan-builder-fields">
+                <label>
+                  Total DCA amount
+                  <div className="money-input"><span>$</span><input inputMode="decimal" value={capitalInput} onChange={event => onCapitalChange(event.target.value)} onBlur={commitCapital} aria-label="Total DCA budget in US dollars" /></div>
+                </label>
+                <label>
+                  Monitoring duration
+                  <select value={reviewDays} onChange={event => setReviewDays(Number(event.target.value))}>
+                    {!DURATION_OPTIONS.includes(reviewDays) && <option value={reviewDays}>{reviewDays} days</option>}
+                    {DURATION_OPTIONS.map(value => <option key={value} value={value}>{value} days</option>)}
+                  </select>
+                </label>
+                <label>
+                  Conditional S1 target
+                  <select value={targetChoice} onChange={event => setTargetChoice(event.target.value)}>
+                    <option value="auto">Auto · from volatility</option>
+                    {targetChoice !== "auto" && !TARGET_OPTIONS.includes(Number(targetChoice)) && (
+                      <option value={targetChoice}>Custom · +{targetChoice}% from avg</option>
+                    )}
+                    {TARGET_OPTIONS.map(value => <option key={value} value={value}>Custom · +{value}% from avg</option>)}
+                  </select>
+                </label>
+              </div>
+
+              <div className="plan-builder-status">
+                <div>
+                  <span>{timeframe.label} evidence</span>
                   <strong>{planHeading}</strong>
                 </div>
-                <span className="simulation-pill">Simulation</span>
-              </div>
-
-              <div className="field-grid">
-                <label>
-                  Total budget
-                  <div className="money-input"><span>$</span><input inputMode="decimal" value={capitalInput} onChange={event => onCapitalChange(event.target.value)} onBlur={commitCapital} aria-label="Total simulation budget in US dollars" /></div>
-                </label>
-                <label>
-                  Goal from avg entry
-                  <select value={targetPct} onChange={event => setTargetPct(Number(event.target.value))}>
-                    {[10, 25, 50, 100, 200].map(value => <option key={value} value={value}>+{value}%</option>)}
-                  </select>
-                </label>
-                <label>
-                  Plan review window
-                  <select value={reviewDays} onChange={event => setReviewDays(Number(event.target.value))}>
-                    {[7, 14, 30, 60, 90].map(value => <option key={value} value={value}>{value} days</option>)}
-                  </select>
-                </label>
+                {candleReady && <RiskMeter quality={selectedPlan.quality} />}
               </div>
 
               {candleLoading && (
-                <div className="gate-box gate-box--warning" role="status">
-                  <strong>Building this interval's evidence</strong>
-                  <p>The previous interval is cleared while real OHLCV is fetched.</p>
+                <div className="gate-box gate-box--warning">
+                  <strong>Building this interval’s evidence</strong>
+                  <p>The plan appears only after the selected pool’s real OHLCV is ready.</p>
                 </div>
               )}
-
               {candleState === "error" && (
-                <div className="gate-box gate-box--blocked" role="alert">
+                <div className="gate-box gate-box--blocked" aria-label="Candle loading controls">
                   <strong>Candles could not be loaded</strong>
                   <p>{candleError}</p>
                   <button type="button" onClick={retryCandles}>Retry this interval</button>
                 </div>
               )}
-
-              {candleReady && <RiskMeter quality={plan.quality} />}
-
-              {candleReady && plan.quality.blockers.length > 0 && (
+              {candleReady && selectedPlan.quality.blockers.length > 0 && (
                 <div className="gate-box gate-box--blocked" role="alert">
-                  <strong>Plan blocked</strong>
-                  <ul>{plan.quality.blockers.map(item => <li key={item}>{item}</li>)}</ul>
-                  {timeframeId !== "4h" && (plan.quality.candleCount < 20 || plan.quality.historyHours < 24) && (
+                  <strong>Plans need more evidence</strong>
+                  <ul>{selectedPlan.quality.blockers.map(item => <li key={item}>{item}</li>)}</ul>
+                  {timeframeId !== "4h" && (selectedPlan.quality.candleCount < 20 || selectedPlan.quality.historyHours < 24) && (
                     <button type="button" onClick={() => chooseTimeframe("4h")}>Use 4H evidence</button>
                   )}
                 </div>
               )}
-
-              {candleReady && plan.quality.warnings.length > 0 && (
-                <div className="gate-box gate-box--warning" role="status" aria-live="polite">
-                  <strong>Risk warnings</strong>
-                  <ul>{plan.quality.warnings.map(item => <li key={item}>{item}</li>)}</ul>
+              {candleReady && selectedPlan.quality.warnings.length > 0 && (
+                <details className="plan-warnings">
+                  <summary>{selectedPlan.quality.warnings.length} data and volatility note{selectedPlan.quality.warnings.length === 1 ? "" : "s"}</summary>
+                  <ul>{selectedPlan.quality.warnings.map(item => <li key={item}>{item}</li>)}</ul>
+                </details>
+              )}
+              {candleReady && planSet.valuationWarnings.length > 0 && (
+                <div className="gate-box gate-box--warning" role="status">
+                  <strong>Verify the reported valuation data</strong>
+                  <ul>{planSet.valuationWarnings.map(item => <li key={item}>{item}</li>)}</ul>
+                </div>
+              )}
+              {canShowPlan && selectedPlan.targetAlreadyMet && (
+                <div className="gate-box gate-box--warning" role="note">
+                  <strong>Today’s quote is already above S1</strong>
+                  <p>S1 is active only after the planned buys fill. This is not a current sell signal.</p>
                 </div>
               )}
 
-              {candleReady && plan.targetAlreadyMet && (
-                <div className="gate-box gate-box--warning">
-                  <strong>Live price is already above this goal line</strong>
-                  <p>The goal is calculated exactly from the simulated average entry. Reassess it instead of treating it as an upside forecast.</p>
-                </div>
-              )}
+              <PlanProfileSelector
+                plans={planSet.profiles}
+                selectedId={selectedPlan.profileId}
+                onSelect={setSelectedProfileId}
+                valueMode={valueMode}
+                currentPrice={market.priceUsd}
+                currentMarketCap={market.marketCapUsd}
+                currentFdv={market.fdvUsd}
+              />
+            </section>
 
-              {candleReady && plan.quality.canPlan && (
-                <div className="plan-summary">
-                  <div><span>Simulated avg entry</span><strong>{formatPrice(plan.weightedAverageEntry)}</strong></div>
-                  <div><span>Goal line</span><strong className="gold">{formatPrice(plan.targetPrice)}</strong></div>
-                  <div><span>Potential target value</span><strong>{formatUsd(plan.targetValue)}</strong></div>
-                  <div><span>{plan.mode === "adaptive" ? "Structural invalidation" : "Scenario floor"}</span><strong className="negative">{formatPrice(plan.invalidationPrice)}</strong></div>
+            <section className="chart-panel chart-panel--studio" aria-labelledby="selected-chart-title">
+              <div className="chart-studio-toolbar">
+                <div>
+                  <span>2 · Read the selected map</span>
+                  <h3 id="selected-chart-title">{selectedPlan.profileName} · {asset.token.symbol?.toUpperCase()} / {valueMode === "price" ? "USD" : valueMode === "marketCap" ? "MCAP" : "FDV"}</h3>
+                  <p><strong>{formatProjectedValue(currentProjection, valueMode)} current</strong> · Hollow rail markers are planned levels, not completed buys or sells.</p>
                 </div>
-              )}
-            </aside>
-          </div>
-
-          <section className="analysis-panel">
-            <div className="analysis-tabs" role="tablist" aria-label="Token analysis">
-              {ANALYSIS_TABS.map(([id, label]) => (
-                <button
-                  key={id}
-                  id={`analysis-tab-${id}`}
-                  type="button"
-                  role="tab"
-                  aria-controls={`analysis-panel-${id}`}
-                  aria-selected={activeTab === id}
-                  tabIndex={activeTab === id ? 0 : -1}
-                  className={activeTab === id ? "active" : ""}
-                  onClick={() => setActiveTab(id)}
-                  onKeyDown={onTabKeyDown}
-                >
-                  {id === "plan" && candleReady && plan.legs.length ? `${label} (${plan.legs.length})` : label}
-                </button>
-              ))}
-            </div>
-
-            <div className="tab-content" id="analysis-panel-plan" role="tabpanel" aria-labelledby="analysis-tab-plan" hidden={activeTab !== "plan"}>
-                <div className="tab-intro">
-                  <div><strong>{candleLoading ? "Analyzing candles" : candleState === "error" ? "Candle data unavailable" : plan.mode === "blocked" ? "Plan blocked" : plan.mode === "adaptive" ? "Potential support zones" : "Volatility reference bands"}</strong><span>{candleLoading ? "The plan will appear only after this interval's real OHLCV is ready." : candleState === "error" ? "Retry this interval from the plan settings panel." : plan.mode === "blocked" ? "Resolve the data-quality blockers before using any buy ladder." : plan.mode === "adaptive" ? "Repeated swing lows plus ATR spacing; never a price prediction." : "Insufficient repeated support evidence. These are ATR-spaced scenarios, not predicted entries."}</span></div>
-                  <span>{formatUsd(plan.budget)} total</span>
-                </div>
-                {candleReady && plan.legs.length ? (
-                  <div className="dca-legs">
-                    {plan.legs.map(leg => (
-                      <article className="dca-leg" key={leg.id}>
-                        <div className="dca-leg__number">{leg.id}</div>
-                        <div className="dca-leg__body">
-                          <div><strong>{leg.label}</strong><span>{leg.rationale}</span></div>
-                          <p>{formatPrice(leg.lower)} – {formatPrice(leg.upper)} <span>{formatPercent(leg.drawdownPct)} from live</span></p>
-                          <small>{leg.supportTouches ? `${leg.supportTouches} clustered historical touches` : "Volatility reference band"}</small>
-                        </div>
-                        <div className="dca-leg__allocation">
-                          <strong>{formatUsd(leg.amountUsd)}</strong>
-                          <span>{leg.allocationPct}% · ≈ {formatTokenAmount(leg.tokenAmount)} {asset.token.symbol?.toUpperCase()}</span>
-                        </div>
-                      </article>
+                <div className="chart-studio-toolbar__controls">
+                  <div className="value-mode-control" role="group" aria-label="Chart value unit">
+                    {VALUE_MODES.map(item => {
+                      const available = item.id === "price" || planSet.valuationScales[item.id]?.available;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={item.id === valueMode ? "active" : ""}
+                          aria-pressed={item.id === valueMode}
+                          disabled={!available}
+                          onClick={() => setValueMode(item.id)}
+                        >
+                          {item.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="timeframe-control" role="group" aria-label="Chart timeframe">
+                    {TIMEFRAMES.map(item => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={item.id === timeframeId ? "active" : ""}
+                        aria-pressed={item.id === timeframeId}
+                        aria-label={item.ariaLabel}
+                        onClick={() => chooseTimeframe(item.id)}
+                      >
+                        {item.label}
+                      </button>
                     ))}
                   </div>
-                ) : (
-                  <div className="empty-state">{candleLoading ? "Analyzing real pool candles…" : candleState === "error" ? "Candle data is unavailable. Retry the selected interval above." : "Resolve the data-quality blockers above before using a buy ladder."}</div>
-                )}
-            </div>
-
-            <div className="tab-content safety-grid" id="analysis-panel-safety" role="tabpanel" aria-labelledby="analysis-tab-safety" hidden={activeTab !== "safety"}>
-                <article className="safety-card">
-                  <span className="status-icon status-icon--good">✓</span>
-                  <div><strong>Exact pool match</strong><p>The submitted contract is an exact token in the selected pool.</p></div>
-                </article>
-                <article className={`safety-card ${market.liquidityUsd < 50_000 ? "safety-card--warn" : ""}`}>
-                  <span className="status-icon">$</span>
-                  <div><strong>Observed liquidity</strong><p>{formatUsd(market.liquidityUsd)} in the selected pool. This does not guarantee execution price.</p></div>
-                </article>
-                <article className="safety-card safety-card--warn">
-                  <span className="status-icon">!</span>
-                  <div><strong>Contract security not scanned</strong><p>Honeypot, tax, mint/freeze authority and holder concentration require a security provider.</p></div>
-                </article>
-                <article className="safety-card safety-card--warn">
-                  <span className="status-icon">?</span>
-                  <div><strong>Unverified is not unsafe — or safe</strong><p>Market data alone cannot prove that a contract is trustworthy.</p></div>
-                </article>
-                <div className="safety-disclaimer">
-                  Passing these market-data checks never means a token is safe. Memecoins can lose 100%, liquidity can disappear, scanners can miss malicious behaviour, and orders may execute far from the displayed price.
+                  <label className="touch-toggle">
+                    <input type="checkbox" checked={showIllustrativeTouches} onChange={event => setShowIllustrativeTouches(event.target.checked)} />
+                    <span>Past level touches</span>
+                  </label>
                 </div>
-            </div>
+              </div>
 
-            <div className="tab-content market-table" id="analysis-panel-market" role="tabpanel" aria-labelledby="analysis-tab-market" hidden={activeTab !== "market"}>
-                {[
-                  ["Network", selectedNetwork],
-                  ["DEX", dexName],
-                  ["Pool", compactAddress(asset.poolAddress, 10, 8)],
-                  ["Counter token", asset.counterToken?.symbol || "—"],
-                  ["Pool created", market.poolCreatedAt ? new Date(market.poolCreatedAt).toLocaleString() : "—"],
-                  ["Valid chart candles", candleReady ? plan.quality.candleCount.toLocaleString() : "—"],
-                  ["History covered", candleReady ? formatHistorySpan(plan.quality.historyDays) : "—"],
-                  ["Expected candle coverage", candleReady && plan.quality.coverageRatio !== null ? formatPercent(plan.quality.coverageRatio * 100) : "—"],
-                  ["Latest candle age", candleReady ? formatAgeHours(plan.quality.latestCandleAgeHours) : "—"],
-                  ["Plan mode", candleLoading ? "Loading" : candleState === "error" || plan.mode === "blocked" ? "Unavailable" : plan.mode === "adaptive" ? "Support-based" : "Volatility reference"],
-                  [plan.mode === "adaptive" ? "Repeated support zones" : "Repeated low clusters", candleReady ? String(plan.structuralSupportCount || 0) : "—"],
-                  ["ATR / live price", candleReady ? formatPercent(plan.quality.atrPct * 100) : "—"],
-                  ["Alternative exact pools", Math.max(0, poolOptions.length - 1).toLocaleString()],
-                  ["Pool resolved", resolvedAt ? new Date(resolvedAt).toLocaleString() : "—"],
-                  ["Candles fetched", candlesAt ? new Date(candlesAt).toLocaleString() : "—"],
-                ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}
-                {poolPageUrl && <a href={poolPageUrl} target="_blank" rel="noreferrer">Open selected pool on GeckoTerminal ↗</a>}
-            </div>
+              <DcaChart
+                candles={candles}
+                plan={candleReady ? selectedPlan : null}
+                symbol={asset.token.symbol}
+                loading={candleLoading}
+                error={candleError}
+                valueMode={valueMode}
+                valuationScales={planSet.valuationScales}
+                illustrativeEvents={illustrativeEvents}
+                showIllustrativeTouches={showIllustrativeTouches}
+              />
+
+              {canShowPlan && (
+                <details className="execution-details">
+                  <summary>Open the full B1–B4 execution stages</summary>
+                  <ExecutionMap
+                    plan={selectedPlan}
+                    tokenSymbol={asset.token.symbol}
+                    reviewDays={reviewDays}
+                    reviewBy={reviewBy}
+                    valueMode={valueMode}
+                  />
+                </details>
+              )}
+            </section>
+
+            {canShowPlan && (
+              <PlanOutcome
+                plan={selectedPlan}
+                budget={capital}
+                durationDays={reviewDays}
+                valueMode={valueMode}
+                market={market}
+                tokenSymbol={asset.token.symbol}
+              />
+            )}
+
+            {canShowPlan && (
+              <section className="volatility-outlook" aria-labelledby="volatility-outlook-title">
+                <header>
+                  <div>
+                    <span>Volatility context</span>
+                    <h3 id="volatility-outlook-title">What this {reviewDays}-day window could expose</h3>
+                  </div>
+                  <span>{selectedPlan.targetSource === "volatility" ? `S1 auto · +${selectedPlan.targetPct}%` : `S1 custom · +${selectedPlan.targetPct}%`}</span>
+                </header>
+                <div className="outlook-range">
+                  <div><span>Lower scenario</span><strong className="negative">{formatProjectedValue(planSet.volatilityOutlook.lower, valueMode)}</strong></div>
+                  <div><span>Current reference</span><strong>{formatProjectedValue(planSet.volatilityOutlook.current, valueMode)}</strong></div>
+                  <div><span>Upper scenario</span><strong className="positive">{formatProjectedValue(planSet.volatilityOutlook.upper, valueMode)}</strong></div>
+                </div>
+                <p>{planSet.volatilityOutlook.caveat} MCAP and FDV use the current reported supply ratio.</p>
+              </section>
+            )}
+
+            <section className="analysis-accordions" aria-label="Safety and market details">
+              <details>
+                <summary>Safety limits</summary>
+                <div className="safety-grid">
+                  <article className="safety-card">
+                    <span className="status-icon status-icon--good">✓</span>
+                    <div><strong>Exact pool match</strong><p>The submitted contract is an exact token in the selected pool.</p></div>
+                  </article>
+                  <article className={`safety-card ${market.liquidityUsd < 50_000 ? "safety-card--warn" : ""}`}>
+                    <span className="status-icon">$</span>
+                    <div><strong>Observed liquidity</strong><p>{formatUsd(market.liquidityUsd)} in this pool. This does not guarantee execution price.</p></div>
+                  </article>
+                  <article className="safety-card safety-card--warn">
+                    <span className="status-icon">!</span>
+                    <div><strong>Contract security not scanned</strong><p>Honeypot, tax, mint/freeze authority and holder concentration need a security provider.</p></div>
+                  </article>
+                  <article className="safety-card safety-card--warn">
+                    <span className="status-icon">?</span>
+                    <div><strong>Unverified is not safe or unsafe</strong><p>Market data alone cannot prove that a contract is trustworthy.</p></div>
+                  </article>
+                  <div className="safety-disclaimer">Memecoins can lose 100%, liquidity can disappear, and real orders may execute far from the displayed levels.</div>
+                </div>
+              </details>
+
+              <details>
+                <summary>Market data and methodology</summary>
+                <div className="market-table">
+                  {[
+                    ["Network", selectedNetwork],
+                    ["DEX", dexName],
+                    ["Pool", compactAddress(asset.poolAddress, 10, 8)],
+                    ["Counter token", asset.counterToken?.symbol || "—"],
+                    ["24h trades", hasTrades ? `${buys} buys · ${sells} sells` : "—"],
+                    ["Valid chart candles", candleReady ? selectedPlan.quality.candleCount.toLocaleString() : "—"],
+                    ["History covered", candleReady ? formatHistorySpan(selectedPlan.quality.historyDays) : "—"],
+                    ["Expected candle coverage", candleReady && selectedPlan.quality.coverageRatio !== null ? formatPercent(selectedPlan.quality.coverageRatio * 100) : "—"],
+                    ["Latest candle age", candleReady ? formatAgeHours(selectedPlan.quality.latestCandleAgeHours) : "—"],
+                    ["ATR / live price", candleReady ? formatPercent(selectedPlan.quality.atrPct * 100) : "—"],
+                    ["Monitoring review", reviewBy],
+                    ["Pool resolved", resolvedAt ? new Date(resolvedAt).toLocaleString() : "—"],
+                    ["Candles fetched", candlesAt ? new Date(candlesAt).toLocaleString() : "—"],
+                  ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}
+                  {poolPageUrl && <a href={poolPageUrl} target="_blank" rel="noreferrer">Open selected pool on GeckoTerminal ↗</a>}
+                </div>
+              </details>
+            </section>
+
+            {canShowPlan && (
+              <div id="share-plan-card" className="share-plan-section" tabIndex={-1} role="region" aria-labelledby="onchain-share-title">
+                <OnchainSharePanel
+                  asset={asset}
+                  plan={selectedPlan}
+                  profile={selectedProfile}
+                  reviewDays={reviewDays}
+                  timeframeLabel={timeframe.label}
+                  dataAsOf={candlesAt}
+                  marketDataAsOf={resolvedAt}
+                  candleDataAsOf={candlesAt}
+                  valuationWarnings={planSet.valuationWarnings}
+                  initialValueMode={valueMode}
+                />
+              </div>
+            )}
+
+            <footer className="onchain-footer">
+              <span>Simulation only · Not financial advice · Planned B1–B4 / conditional S1 / manual X1</span>
+              <span>Selected pool: {dexName} · {compactAddress(asset.poolAddress)}</span>
+            </footer>
+
+            {canShowPlan && (
+              <div className="plan-sticky-actions" aria-label="Plan actions">
+                <button type="button" onClick={() => scrollTo("share-plan-card")}>Customize card</button>
+                <button type="button" onClick={() => scrollTo("plan-builder")}>Edit plan</button>
+              </div>
+            )}
           </section>
-
-          <footer className="onchain-footer">
-            <span>Automated historical market analysis · Not financial advice · B1–B4 / S1 execution map</span>
-            <span>Selected pool: {dexName} · {compactAddress(asset.poolAddress)}</span>
-          </footer>
-        </section>
-      )}
+        )}
       </main>
     </div>
   );

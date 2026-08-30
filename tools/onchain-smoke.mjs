@@ -172,14 +172,17 @@ try {
     await page.waitForSelector(".token-workspace");
     await page.waitForFunction(() => document.querySelector(".cmvng-dca-chart__source")?.textContent.includes("120 candles"));
     await page.waitForSelector(".cmvng-dca-chart__canvas canvas");
-    const legCount = await page.locator(".dca-leg").count();
-    if (legCount !== 4) throw new Error(`expected 4 plan legs, found ${legCount}`);
+    const profileCount = await page.locator(".cmvng-plan-card").count();
+    if (profileCount !== 3) throw new Error(`expected 3 visible plan profiles, found ${profileCount}`);
+    if (await page.locator(".cmvng-plan-card--selected").count() !== 1) {
+      throw new Error("exactly one plan profile should be selected");
+    }
     const executionCount = await page.locator(".execution-step--buy").count();
-    if (executionCount !== 4) throw new Error(`expected 4 always-visible execution steps, found ${executionCount}`);
+    if (executionCount !== 4) throw new Error(`expected 4 execution steps, found ${executionCount}`);
     for (const markerId of ["B1", "B2", "B3", "B4", "S1", "X1"]) {
       await page.waitForSelector(`[data-marker-id="${markerId}"]:not([hidden])`);
     }
-    if (!(await page.textContent(".execution-map")).includes("S1 conditional exit")) {
+    if (!(await page.textContent(".execution-map")).includes("S1 conditional target reference")) {
       throw new Error("conditional S1 execution copy is missing");
     }
     const executionText = await page.textContent(".execution-map");
@@ -192,12 +195,29 @@ try {
     if (await page.locator('.timeframe-control button:has-text("MAX")').count()) {
       throw new Error("duplicate MAX timeframe is still present");
     }
+    if (!(await page.textContent(".cmvng-dca-chart__symbol")).includes("MCAP")) {
+      throw new Error("verified market cap should be the initial valuation chart mode");
+    }
+    if (await page.locator('.value-mode-control button:has-text("FDV")').count() !== 1) {
+      throw new Error("price / market-cap / FDV controls are incomplete");
+    }
+    if (await page.locator('.plan-sticky-actions button:has-text("Customize card")').count() !== 1) {
+      throw new Error("sticky plan-card action is missing");
+    }
     const box = await page.locator(".cmvng-dca-chart__canvas canvas").first().boundingBox();
     if (!box || box.width < 100 || box.height < 100) throw new Error("chart canvas has no usable dimensions");
     if (lastCandleUrl?.searchParams.get("aggregate") !== "4") throw new Error("default 4-hour request was not sent");
     const analyzerUrl = new URL(page.url());
-    if (analyzerUrl.searchParams.get("address") !== CONTRACT || analyzerUrl.searchParams.get("interval") !== "4h") {
-      throw new Error("contract and interval were not persisted in the URL");
+    if (
+      analyzerUrl.searchParams.get("address") !== CONTRACT
+      || analyzerUrl.searchParams.get("interval") !== "4h"
+      || analyzerUrl.searchParams.get("amount") !== "500"
+      || analyzerUrl.searchParams.get("duration") !== "30"
+      || analyzerUrl.searchParams.get("plan") !== "balanced"
+      || analyzerUrl.searchParams.get("unit") !== "marketCap"
+      || analyzerUrl.searchParams.get("target") !== "auto"
+    ) {
+      throw new Error("the complete plan context was not persisted in the URL");
     }
     if (consoleErrors.length) throw new Error(consoleErrors.join(" | "));
   });
@@ -220,8 +240,8 @@ try {
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       if (overflow > 2) throw new Error(`horizontal overflow ${overflow}px at ${width}px`);
       const chartTop = (await page.locator(".chart-panel").boundingBox())?.y;
-      const settingsTop = (await page.locator(".strategy-panel").boundingBox())?.y;
-      if (!(chartTop < settingsTop)) throw new Error("chart does not precede plan settings on mobile");
+      const settingsTop = (await page.locator(".plan-studio").boundingBox())?.y;
+      if (!(settingsTop < chartTop)) throw new Error("amount, duration, and plan choice must precede the chart on mobile");
     }
     await page.screenshot({ path: join(SCREENSHOT_DIR, "cmvng-contract-mobile.png"), fullPage: false });
   });
@@ -230,17 +250,39 @@ try {
     await page.click('.timeframe-control button:has-text("1D")');
     await page.waitForFunction(() => document.querySelector(".cmvng-dca-chart__source")?.textContent.includes("26 candles"));
     await page.waitForSelector('[data-marker-id="S1"]:not([hidden])');
-    const settingsText = await page.textContent(".strategy-panel");
-    if (!settingsText.includes("Volatility-reference ladder")) throw new Error("short-history plan mode is not clearly labeled");
-    if (settingsText.includes("Plan blocked")) throw new Error("26 daily candles incorrectly blocked the plan");
+    const executionText = await page.textContent(".execution-map");
+    if (!executionText.includes("Volatility-reference execution ladder")) throw new Error("short-history plan mode is not clearly labeled");
+    if ((await page.textContent(".plan-studio")).includes("Plans need more evidence")) throw new Error("26 daily candles incorrectly blocked the plan");
     if (new URL(page.url()).searchParams.get("interval") !== "1d") throw new Error("daily interval was not persisted in the URL");
   });
 
   await step("decimal budgets are preserved", async () => {
-    const budget = page.locator('input[aria-label="Total simulation budget in US dollars"]');
+    const budget = page.locator('input[aria-label="Total DCA budget in US dollars"]');
     await budget.fill("500.50");
-    await page.locator(".strategy-panel__heading").click();
+    await page.locator(".plan-studio__heading").click();
     if (await budget.inputValue() !== "500.5") throw new Error("decimal budget was not preserved");
+  });
+
+  await step("profile, duration, target, valuation, and touch controls update the plan", async () => {
+    await page.locator(".cmvng-plan-card").filter({ hasText: "Early entry" }).click();
+    await page.selectOption('label:has-text("Monitoring duration") select', "60");
+    await page.selectOption('label:has-text("Conditional S1 target") select', "100");
+    await page.click('.value-mode-control button:has-text("FDV")');
+    await page.check('.touch-toggle input[type="checkbox"]');
+    await page.waitForSelector(".cmvng-dca-chart__touch-notice");
+    const url = new URL(page.url());
+    if (
+      url.searchParams.get("plan") !== "aggressive"
+      || url.searchParams.get("duration") !== "60"
+      || url.searchParams.get("target") !== "100"
+      || url.searchParams.get("unit") !== "fdv"
+      || url.searchParams.get("touches") !== "1"
+    ) {
+      throw new Error("selected plan controls were not persisted");
+    }
+    if (!(await page.textContent("#selected-chart-title")).includes("Early entry")) {
+      throw new Error("selected profile was not applied to the main chart");
+    }
   });
 
   await step("contract, pool, and interval survive reload", async () => {
@@ -248,6 +290,11 @@ try {
     await page.waitForFunction(() => document.querySelector(".cmvng-dca-chart__source")?.textContent.includes("26 candles"));
     if (await page.locator("#pool-source").inputValue() !== `base:${POOL_B}`) throw new Error("pool selection was not restored");
     if ((await page.locator('.timeframe-control button:has-text("1D")').getAttribute("aria-pressed")) !== "true") throw new Error("interval was not restored");
+    if ((await page.locator('.value-mode-control button:has-text("FDV")').getAttribute("aria-pressed")) !== "true") throw new Error("valuation unit was not restored");
+    if (!(await page.locator(".cmvng-plan-card").filter({ hasText: "Early entry" }).getAttribute("class")).includes("selected")) throw new Error("plan profile was not restored");
+    if (await page.locator('label:has-text("Monitoring duration") select').inputValue() !== "60") throw new Error("duration was not restored");
+    if (!(await page.locator('.touch-toggle input[type="checkbox"]').isChecked())) throw new Error("touch disclosure was not restored");
+    await page.waitForSelector(".cmvng-dca-chart__touch-notice");
     await page.waitForSelector('[data-marker-id="S1"]:not([hidden])');
   });
 

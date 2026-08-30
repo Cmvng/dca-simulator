@@ -6,7 +6,28 @@ import {
   formatUsd,
 } from "../lib/onchain/formatters.js";
 
-export default function ExecutionMap({ plan, tokenSymbol, reviewDays, reviewBy }) {
+const finitePositive = value => Number.isFinite(Number(value)) && Number(value) > 0;
+
+function levelValue(price, valuation, valueMode, plan) {
+  if (valueMode === "price") return Number(price);
+  const attached = valueMode === "marketCap" ? valuation?.marketCapUsd : valuation?.fdvUsd;
+  if (finitePositive(attached)) return Number(attached);
+  const multiplier = plan?.valuationScales?.[valueMode]?.multiplier;
+  return finitePositive(price) && finitePositive(multiplier) ? Number(price) * Number(multiplier) : null;
+}
+
+function formatLevel(price, valuation, valueMode, plan) {
+  const value = levelValue(price, valuation, valueMode, plan);
+  if (!finitePositive(value)) return "Unavailable";
+  return valueMode === "price" ? formatPrice(value) : formatUsd(value, { compact: true });
+}
+
+function unitLabel(valueMode) {
+  if (valueMode === "marketCap") return "implied market cap";
+  return valueMode === "fdv" ? "implied FDV" : "price";
+}
+
+export default function ExecutionMap({ plan, tokenSymbol, reviewDays, reviewBy, valueMode = "price" }) {
   if (!plan?.quality?.canPlan || !plan.legs?.length) return null;
 
   const symbol = String(tokenSymbol || "TOKEN").toUpperCase();
@@ -19,14 +40,14 @@ export default function ExecutionMap({ plan, tokenSymbol, reviewDays, reviewBy }
       <header className="execution-map__header">
         <div>
           <span>Price-trigger execution map</span>
-          <h3 id="execution-map-title">B1–B4 buys · S1 conditional exit</h3>
+          <h3 id="execution-map-title">B1–B4 buys · S1 target reference · X1 close-below reassess</h3>
         </div>
         <span className="execution-map__window">{reviewDays}-day review</span>
       </header>
 
       <div className="execution-map__notice">
         <strong>{modeLabel}</strong>
-        <span>No buy date is predicted. A buy becomes relevant only if price enters its band.</span>
+        <span>No buy date is predicted. Values are shown in {unitLabel(valueMode)}; a buy matters only if price enters its band.</span>
       </div>
 
       <div className="execution-map__buys" aria-label="Potential buy zones">
@@ -35,8 +56,8 @@ export default function ExecutionMap({ plan, tokenSymbol, reviewDays, reviewBy }
             <span className="execution-step__id">{leg.id}</span>
             <div className="execution-step__main">
               <span>Potential buy zone</span>
-              <strong>{formatPrice(leg.lower)} – {formatPrice(leg.upper)}</strong>
-              <small>{formatPercent(leg.drawdownPct)} from live · {leg.rationale}</small>
+              <strong>{formatLevel(leg.lower, leg.valuation?.lower, valueMode, plan)} – {formatLevel(leg.upper, leg.valuation?.upper, valueMode, plan)}</strong>
+              <small>{valueMode === "price" ? "" : `${formatPrice(leg.lower)} – ${formatPrice(leg.upper)} · `}{formatPercent(leg.drawdownPct)} from live · {leg.rationale}</small>
             </div>
             <div className="execution-step__amount">
               <strong>{leg.allocationPct}% · {formatUsd(leg.amountUsd)}</strong>
@@ -50,17 +71,17 @@ export default function ExecutionMap({ plan, tokenSymbol, reviewDays, reviewBy }
         <article className="execution-outcome execution-outcome--target">
           <span className="execution-step__id">S1</span>
           <div>
-            <span>Conditional target</span>
-            <strong>{formatPrice(plan.targetPrice)} · +{plan.targetPct}% from average</strong>
-            <small>Applies only after all planned buys fill · simulated value {formatUsd(plan.targetValue)}</small>
+            <span>S1 conditional target reference</span>
+            <strong>{formatLevel(plan.targetPrice, plan.target?.valuation, valueMode, plan)} · +{plan.targetPct}% from average</strong>
+            <small>{valueMode === "price" ? "" : `${formatPrice(plan.targetPrice)} price · `}active only after planned fills · no sell allocation or executed sale is modeled · position value {formatUsd(plan.targetValue)}</small>
           </div>
         </article>
         <article className="execution-outcome execution-outcome--risk">
           <span className="execution-step__id">X1</span>
           <div>
-            <span>Reassess below</span>
-            <strong>{formatPrice(plan.invalidationPrice)}</strong>
-            <small>{plan.mode === "adaptive" ? "Structural invalidation" : "Scenario floor"} · not an automatic stop order</small>
+            <span>X1 close-below manual reassessment</span>
+            <strong>{formatLevel(plan.invalidationPrice, plan.reassessment?.valuation, valueMode, plan)}</strong>
+            <small>{valueMode === "price" ? "" : `${formatPrice(plan.invalidationPrice)} price · `}selected-timeframe candle CLOSE below X1 required; a wick does not count · manual only, not an automatic stop or executed sale · {formatUsd(plan.reassessment?.capitalAtRiskUsd)} modeled loss at exact X1 after all fills; gaps can lose more</small>
           </div>
         </article>
       </div>
@@ -68,7 +89,7 @@ export default function ExecutionMap({ plan, tokenSymbol, reviewDays, reviewBy }
       <footer className="execution-map__footer">
         <span>Monitoring window</span>
         <strong>Review by {reviewBy}</strong>
-        <small>Simulation only—no orders are placed. Recheck sooner if liquidity, pool, or volatility changes materially.</small>
+        <small>Simulation only—no orders are placed. MCAP/FDV levels assume the current reported supply ratio. Recheck sooner if liquidity, pool, or volatility changes materially.</small>
       </footer>
     </section>
   );

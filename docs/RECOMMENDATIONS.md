@@ -13,6 +13,13 @@ Priorities use P0 (required for trustworthy launch), P1 (high-value next), and P
 - [x] TradingView Lightweight Charts attribution.
 - [x] User-selectable alternative exact pools and explicit counter-token identity.
 - [x] Duration-aware confidence, short-window reference mode, and accessible chart summaries/tables.
+- [x] Three visible price-zone profiles with distinct allocation/spacing and explicit non-suitability language.
+- [x] Budget, 7–90 day monitoring duration, volatility-scaled/custom target, downside context, and prefix/all-fill outcomes.
+- [x] Price / Market Cap / FDV chart and level views with constant-supply-ratio disclosure and no missing-value substitution.
+- [x] Planned B1–B4/S1/X1 rail plus optional, explicitly retrospective in-sample touch markers.
+- [x] Contract-token X, square, and story share cards with pool/DEX/counter provenance and `PLANNED · NOT EXECUTED` labeling.
+- [x] Full contract-plan URL state for address, pool, interval, amount, duration, profile, unit, target, and touch visibility.
+- [x] Main simulator chart annotations that distinguish modeled purchases, a conditional target crossing, and the modeled low-water point.
 
 ## P0 — launch integrity
 
@@ -24,18 +31,17 @@ Priorities use P0 (required for trustworthy launch), P1 (high-value next), and P
 
 ## P1 — product quality
 
-- Add Price / Market Cap chart toggle for tiny-decimal tokens.
-- Add saved/watchlisted plans in a database with alert thresholds.
-- Add share cards for contract tokens with chain, pool, liquidity warning, and plan zones.
+- Add saved/watchlisted contract plans in a database, with a durable evidence snapshot and explicit stale-plan state.
+- Add alerts when a planned zone is reached, an interval closes below X1, liquidity falls sharply, or contract-security evidence changes.
 - Add a fixed higher-timeframe evidence option so changing the viewing interval need not change a long-horizon ladder.
 - Add a compact provider-window disclosure with the actual first/last candle timestamps.
+- Build rolling or prefix out-of-sample backtests before publishing any plan success rate, hit probability, or confidence phrased as predictive. Compare with equal-time DCA and lump-sum baselines, and preserve a strict split between plan construction and evaluation candles.
+- Add genuinely different time-scheduled and hybrid DCA plan types. Keep them separate from the three existing price-zone profiles and label their execution assumptions independently.
 
 ## P2 — advanced intelligence
 
 - Holder concentration and wallet-cluster analysis from a dedicated onchain provider.
 - Liquidity-lock/burn evidence and deployer-history signals.
-- Alerts when a DCA zone is reached, liquidity falls sharply, or security state changes.
-- Backtests that compare the displayed plan with equal-time DCA and lump-sum baselines.
 - Multi-pool aggregation only after robust outlier and manipulated-pool handling.
 - Optional authenticated portfolio tracking; no trade execution until legal, security, and transaction-simulation work is complete.
 

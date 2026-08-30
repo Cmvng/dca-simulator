@@ -11,8 +11,9 @@ import { fmtUSD, fmtPrice, fmtTok } from "../../lib/formatting/money.js";
 import { fmtDateShort } from "../../lib/formatting/dates.js";
 
 const W = 700, H = 280, PAD_L = 56, PAD_R = 62, PAD_T = 16, PAD_B = 30;
+const ACTION_ORANGE = "#D86B16";
 
-export default function PortfolioChart({ series, avgEntry, mode }) {
+export default function PortfolioChart({ series, avgEntry, mode, targetPrice = null }) {
   const [hover, setHover] = useState(null);
   const svgRef = useRef(null);
 
@@ -20,18 +21,35 @@ export default function PortfolioChart({ series, avgEntry, mode }) {
     if (!series?.length) return null;
     const xs = series.map((_, i) => i);
     const moneyVals = series.flatMap(s => [s.value, s.cumInvested]);
-    const priceVals = series.map(s => s.price).concat([avgEntry]);
+    const normalizedTarget = Number(targetPrice);
+    const validTarget = Number.isFinite(normalizedTarget) && normalizedTarget > 0
+      ? normalizedTarget
+      : null;
+    const priceVals = series
+      .map(s => s.price)
+      .concat([avgEntry], validTarget === null ? [] : [validTarget]);
     const mMax = Math.max(...moneyVals) * 1.05, mMin = 0;
     const pMax = Math.max(...priceVals) * 1.02, pMin = Math.min(...priceVals) * 0.98;
     const x = i => PAD_L + (i / Math.max(1, xs.length - 1)) * (W - PAD_L - PAD_R);
     const yM = v => PAD_T + (1 - (v - mMin) / (mMax - mMin || 1)) * (H - PAD_T - PAD_B);
     const yP = v => PAD_T + (1 - (v - pMin) / (pMax - pMin || 1)) * (H - PAD_T - PAD_B);
     const path = (get, y) => series.map((s, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(get(s)).toFixed(1)}`).join("");
-    return { x, yM, yP, path, mMax, pMin, pMax };
-  }, [series, avgEntry]);
+    const markerStep = Math.max(1, Math.ceil(series.length / 12));
+    const buyMarkerIndexes = series
+      .map((_, index) => index)
+      .filter(index => index === 0 || index === series.length - 1 || index % markerStep === 0);
+    const targetIndex = validTarget !== null
+      ? series.findIndex(point => point.price >= validTarget)
+      : -1;
+    const worstIndex = series.reduce(
+      (lowest, point, index) => point.price < series[lowest].price ? index : lowest,
+      0,
+    );
+    return { x, yM, yP, path, mMax, pMin, pMax, buyMarkerIndexes, targetIndex, validTarget, worstIndex };
+  }, [series, avgEntry, targetPrice]);
 
   if (!model) return null;
-  const { x, yM, yP, path } = model;
+  const { x, yM, yP, path, buyMarkerIndexes, targetIndex, validTarget, worstIndex } = model;
 
   const onMove = e => {
     const rect = svgRef.current.getBoundingClientRect();
@@ -51,6 +69,10 @@ export default function PortfolioChart({ series, avgEntry, mode }) {
         <LegendItem color={T.ink3} width={1} dash="4 3" label="Amount invested" />
         <LegendItem color={T.blue} width={2} label={mode === "backtest" ? "Actual price" : "Simulated price"} />
         <LegendItem color={T.bluePress} width={1.5} dash="6 4" label="Avg entry" />
+        <MarkerLegend color={T.gain} glyph="+" label={mode === "backtest" ? "Sampled modeled backtest buys" : "Sampled simulated buys"} />
+        {validTarget !== null && <LegendItem color={ACTION_ORANGE} width={1.5} dash="5 4" label="Conditional S target · no sale modeled" />}
+        {targetIndex >= 0 && <MarkerLegend color={ACTION_ORANGE} glyph="−" label="First target crossing · no sale modeled" />}
+        <MarkerLegend color={T.loss} glyph="!" label="Lowest sample price · not an exit" />
       </div>
 
       <div style={{ position: "relative" }}>
@@ -80,7 +102,7 @@ export default function PortfolioChart({ series, avgEntry, mode }) {
           })}
           {/* x-axis dates */}
           {Array.from({ length: ticksX + 1 }, (_, i) => {
-            const idx = Math.round((i / ticksX) * (series.length - 1));
+            const idx = ticksX === 0 ? 0 : Math.round((i / ticksX) * (series.length - 1));
             return <text key={i} x={x(idx)} y={H - 8} textAnchor="middle" fontSize="11" fontWeight="500" fontFamily={SANS} fill={T.ink3}>{fmtDateShort(series[idx].date)}</text>;
           })}
 
@@ -92,6 +114,70 @@ export default function PortfolioChart({ series, avgEntry, mode }) {
           <path d={path(s => s.price, yP)} fill="none" stroke={T.blue} strokeWidth="2" strokeLinejoin="round" />
           {/* avg entry rule */}
           <line x1={PAD_L} x2={W - PAD_R} y1={yP(avgEntry)} y2={yP(avgEntry)} stroke={T.bluePress} strokeWidth="1.5" strokeDasharray="6 4" />
+
+          {/* Conditional scenario target. It is a reference line, never an executed sale. */}
+          {validTarget !== null && (
+            <g aria-hidden="true" pointerEvents="none">
+              <line
+                x1={PAD_L}
+                x2={W - PAD_R}
+                y1={yP(validTarget)}
+                y2={yP(validTarget)}
+                stroke={ACTION_ORANGE}
+                strokeWidth="1.5"
+                strokeDasharray="5 4"
+              />
+              <rect
+                x={W - PAD_R - 92}
+                y={yP(validTarget) - 10}
+                width="89"
+                height="20"
+                rx="6"
+                fill="#FFF3E8"
+                stroke={ACTION_ORANGE}
+              />
+              <text
+                x={W - PAD_R - 8}
+                y={yP(validTarget) + 3.5}
+                textAnchor="end"
+                fontSize="10.5"
+                fontWeight="700"
+                fontFamily={SANS}
+                fill="#7A3100"
+              >
+                S · conditional
+              </text>
+            </g>
+          )}
+
+          {/* Fomo-style action markers. These are explicitly scoped to this simulation/backtest. */}
+          {buyMarkerIndexes.map(index => (
+            <ChartMarker
+              key={`buy-${index}`}
+              x={x(index)}
+              y={yP(series[index].price)}
+              color={T.gain}
+              glyph="+"
+            />
+          ))}
+          {targetIndex >= 0 && (
+            <ChartMarker
+              x={x(targetIndex)}
+              y={yP(series[targetIndex].price)}
+              color={ACTION_ORANGE}
+              glyph="−"
+              above
+            />
+          )}
+          {worstIndex >= 0 && (
+            <ChartMarker
+              x={x(worstIndex)}
+              y={yP(series[worstIndex].price)}
+              color={T.loss}
+              glyph="!"
+              above
+            />
+          )}
 
           {/* hover crosshair + active dots (the only dots on the chart) */}
           {hovered && (
@@ -144,5 +230,25 @@ function LegendItem({ color, width, dash, label }) {
       </svg>
       {label}
     </span>
+  );
+}
+
+function MarkerLegend({ color, glyph, label }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+      <span aria-hidden="true" style={{ width: 16, height: 16, display: "grid", placeItems: "center", color: "#fff", borderRadius: "50%", background: color, fontSize: 12, fontWeight: 800, lineHeight: 1 }}>{glyph}</span>
+      {label}
+    </span>
+  );
+}
+
+function ChartMarker({ x, y, color, glyph, above = false }) {
+  const cy = y + (above ? -13 : 13);
+  return (
+    <g aria-hidden="true" pointerEvents="none">
+      <line x1={x} x2={x} y1={y} y2={cy} stroke={color} strokeWidth="1.5" opacity=".72" />
+      <circle cx={x} cy={cy} r="8.5" fill={color} stroke="#fff" strokeWidth="1.4" />
+      <text x={x} y={cy + 3.7} textAnchor="middle" fontSize="12" fontWeight="800" fontFamily={SANS} fill="#fff">{glyph}</text>
+    </g>
   );
 }

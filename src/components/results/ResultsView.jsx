@@ -132,7 +132,7 @@ export default function ResultsView({ sim, selected, analysis, live, history, ta
 
       {/* ── ENTRIES ── */}
       <Section ariaLabel="Your entries" eyebrow label={`Price path · ${sim.windowDays}-day sample`}>
-        <PortfolioChart series={sim.series} avgEntry={sim.avgEntry} mode="scenario" />
+        <PortfolioChart series={sim.series} avgEntry={sim.avgEntry} mode="scenario" targetPrice={sim.targetPrice} />
         <div style={{ marginTop: 10 }}>
           <BuyBarcode entries={sim.entries} madeCount={0} currentIndex={0} />
           <div style={{ ...monoLabel, fontWeight: 500, marginTop: 6, marginBottom: 0 }}>
