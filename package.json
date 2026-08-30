@@ -7,12 +7,14 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server.js",
-    "test": "node --test 'src/**/*.test.js'",
+    "test": "node --test",
     "lint": "eslint .",
     "smoke": "node tools/smoke.mjs",
+    "smoke:onchain": "node tools/onchain-smoke.mjs",
     "e2e:plans": "node tools/plans-e2e.mjs"
   },
   "dependencies": {
+    "lightweight-charts": "^5.2.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },

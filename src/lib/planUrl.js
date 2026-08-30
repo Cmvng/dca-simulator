@@ -1,7 +1,8 @@
 // Shareable plan URLs without a server: the plan config is encoded in the URL
 // hash (#p=...). Contains ONLY the plan parameters — never names, photos, or
 // anything personal. A recipient's browser rebuilds the simulation locally.
-// (Server-stored short links /plan/<id> would need a database — future work.)
+// The app prefers revocable /plan/<id> short links when its plan API is
+// available and uses this fragment form as the infrastructure-free fallback.
 
 const FIELDS = ["coinId", "capital", "freqId", "months", "targetPct", "feePct", "feeFixed", "slippagePct", "hybridPct", "mode"];
 

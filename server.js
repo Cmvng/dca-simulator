@@ -8,7 +8,9 @@ import http from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import handler from "./api/coins.js";
+import coinsHandler from "./api/coins.js";
+import tokenHandler from "./api/token.js";
+import candlesHandler from "./api/candles.js";
 import { handlePlansRequest } from "./api/plans.js";
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -36,21 +38,28 @@ function cacheTtlMs(headers) {
   return m ? Number(m[1]) * 1000 : 0;
 }
 
-async function serveApi(req, res, url) {
-  const key = url.pathname + url.search;
+const EDGE_API_HANDLERS = new Map([
+  ["/api/coins", coinsHandler],
+  ["/api/token", tokenHandler],
+  ["/api/candles", candlesHandler],
+]);
+
+async function serveApi(req, res, url, handler) {
+  const isGet = req.method === "GET";
+  const key = `${req.method}:${url.pathname}${url.search}`;
   const hit = apiCache.get(key);
-  if (hit && hit.expires > Date.now()) {
+  if (isGet && hit && hit.expires > Date.now()) {
     res.writeHead(hit.status, { ...hit.headers, "x-cmvng-cache": "hit" });
     res.end(hit.body);
     return;
   }
-  const request = new Request(`http://localhost${key}`, { method: req.method });
+  const request = new Request(`http://localhost${key}`, { method: req.method, headers: req.headers });
   const response = await handler(request);
   const body = Buffer.from(await response.arrayBuffer());
   const headers = {};
   response.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
   const ttl = response.status === 200 ? cacheTtlMs(headers) : 0;
-  if (ttl > 0) {
+  if (isGet && ttl > 0) {
     if (apiCache.size >= MAX_CACHE_ENTRIES) {
       const oldest = apiCache.keys().next().value;
       apiCache.delete(oldest);
@@ -137,7 +146,8 @@ async function serveStatic(res, pathname) {
 http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://localhost");
-    if (url.pathname === "/api/coins") return await serveApi(req, res, url);
+    const edgeHandler = EDGE_API_HANDLERS.get(url.pathname);
+    if (edgeHandler) return await serveApi(req, res, url, edgeHandler);
     if (url.pathname === "/api/plans") return await servePlans(req, res, url);
     if (url.pathname === "/healthz") { res.writeHead(200); return res.end("ok"); }
     return await serveStatic(res, url.pathname);

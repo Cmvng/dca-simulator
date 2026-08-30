@@ -1,163 +1,128 @@
-# CMVNG DCA Simulator — Project Overview (v2)
+# CMVNG DCA Simulator — Project Overview
 
-> **What this is:** a crypto DCA **decision engine** — build a plan, stress-test it against
-> realistic market conditions (scenarios, backtests, distributions), compare it with lump-sum
-> deployment, and share or track it. Brand: **CMVNG** (`cmvng.app`). Data: CoinGecko via a
-> caching Vercel Edge proxy. The app never presents a simulation as a forecast.
->
-> *v1 of this document (single-file app) is preserved in git history at commit `18f7647`.*
+CMVNG is a crypto DCA decision engine with two deliberately separate product paths:
 
----
+- **Established-asset planner** at `/` and `/plan/<id>`: time-scheduled DCA scenarios, historical backtests, comparisons, saving, tracking, and sharing.
+- **Contract analyzer** at `/contract`: exact onchain pool discovery, real OHLCV, market-data gates, and a price-triggered staggered buy ladder.
 
-## 1. Tech stack
+Neither path predicts future candles or certifies a token as safe.
 
-| Layer | Technology |
+## Stack and deployment
+
+| Layer | Current implementation |
 |---|---|
-| Frontend | React 18 + Vite 4, inline styles (no CSS framework), custom SVG chart |
-| Engine | Pure ES modules in `src/lib/simulation/` — no UI imports, fully unit-tested |
-| Tests | `node --test` (Node 20+), zero extra runtime deps; Playwright smoke via `playwright-core` |
-| Backend | One Vercel **Edge Function** (`api/coins.js`) proxying CoinGecko with edge caching |
-| Hosting | Vercel (not deployed from the v2 branch yet) |
+| Frontend | React 18, Vite 4, Plus Jakarta Sans, CLEAR BLUE design system |
+| Established charts | Custom accessible SVG components |
+| Contract chart | TradingView Lightweight Charts 5, lazy-loaded only on `/contract` |
+| Pure engines | ES modules under `src/lib/simulation/` and `src/lib/onchain/` |
+| Browser services | `src/services/` with cancellation and normalized errors |
+| APIs | Fetch-style handlers in `api/`; Vite middleware locally; standalone Node server on Railway; Vercel-compatible edge exports |
+| Persistence | localStorage for local plans; JSON-file store for public plans with hashed owner tokens and `PLANS_DIR` volume support |
+| Verification | node:test, ESLint, Playwright harnesses, GitHub Actions lint/test/build CI |
 
-## 2. Repository layout
+Railway tracks `feat/cmvng-v2-upgrade`. Feature branches should be reviewed before merge; a side branch is not a deployment instruction.
 
-```
-api/coins.js                      Edge proxy: list / history(365d) / price / image
-vite.config.js                    + dev middleware that serves /api/coins locally
+## Repository map
+
+```text
+api/
+  coins.js                 CoinGecko list/history/price/image proxy
+  token.js                 Exact token/pool discovery
+  candles.js               Token-oriented GeckoTerminal OHLCV
+  _onchain.js              Validation, normalization, ranking, errors, cache policy
+  plans.js                 Public-plan lifecycle and storage
 src/
-  main.jsx                        React root
-  App.jsx                         orchestration only (state, mode, wiring)
-  styles/theme.js                 palette + shared styles + global CSS
-  services/api.js                 fetch, localStorage cache, staleness, stale fallback
-  hooks/                          useCoins, useMarketData, useSimulation, useSavedPlans
+  main.jsx                 React root
+  AppShell.jsx             Route split: established app vs lazy /contract
+  App.jsx                  Established-asset orchestration
   components/
-    Header, CoinSelector, CapitalInput, FrequencySelector, DurationSelector,
-    TargetSelector, AdvancedOptions, SchedulePreview, SharePanel, SavedPlansPanel,
-    ErrorState, LoadingState, ui.jsx (primitives)
-    results/
-      ResultsView (assembly), MarketSnapshot, ScenarioGrid, RealityCheck,
-      MarketConditions, StrategyComparison, RollingWindows, RiskCards,
-      PortfolioChart, DcaTimeline, MonteCarloCard, WaitForDip, BacktestView,
-      Methodology
+    OnchainAnalyzer.jsx    Contract workflow and risk/plan presentation
+    DcaChart.jsx           Real candlesticks, volume, plan references, a11y
+    results/               Established-asset results surfaces
+  hooks/                   Established-asset request and simulation state
+  services/
+    api.js                 CoinGecko proxy client/cache
+    onchainApi.js          Contract and candle client
   lib/
-    version.js                    MODEL_VERSION (currently 2.0.0)
-    simulation/
-      dca.js                      schedule, execution (fees/slippage), lump/hybrid, break-even
-      historical.js               scaled-window (v1), backtest slices, rolling windows, moves
-      scenarios.js                scenario set, reality check, wait-for-dip
-      scoring.js                  analyzeMarket (v1 port), explainable market conditions
-      statistics.js               avg/std/percentile/drawdown/log-returns
-      monteCarlo.js               seeded bootstrap distribution mode
-      validate.js                 data-quality gate
-      engine.js                   runScenarioSimulation / runBacktest (orchestrators)
-      *.test.js                   30 tests incl. v1-equivalence oracle + invariants
-    formatting/  money, percentage, dates
-    sharing/shareCard.js          canvas cards: X 1200×675, square 1080×1080, story 1080×1920
-    planUrl.js                    hash-encoded shareable plan links (validated on decode)
-    savedPlans.js                 local plans + live tracking (model-versioned)
-    analytics.js                  no-op-safe event layer
-docs/                             PROJECT_OVERVIEW (this file), CHECKPOINT, MEMORY
+    simulation/            Behavior-locked CMVNG Simulation v3
+    onchain/               Onchain ladder v1 and formatters
+    sharing/               Share-card rendering
+    planApi.js             Public-plan client
+    savedPlans.js          Local saved/tracked plans
+server.js                  Railway/static server plus all API routes
+vite.config.js             Same-origin local API adapters
+tools/
+  smoke.mjs                Established planner browser smoke
+  onchain-smoke.mjs        Mocked contract/chart browser smoke
+  plans-e2e.mjs            Public-plan create/view/revoke lifecycle
+docs/                      Checkpoint, memory, methodology, and recommendations
 ```
 
-## 3. The three simulation modes (kept strictly separate)
+## Established-asset engine
 
-1. **Scenario simulation** (default; v1 methodology preserved exactly): the historical window
-   matching the plan's duration is scaled so its average sits on the live price; entries are
-   sampled evenly across it; every outcome (target/flat/−20%/−50%/derived) is valued from the
-   live price. Anchored to now, real volatility shape — a plausible path, never a forecast.
-2. **Historical backtest**: actual prices and dates from a chosen completed period, no scaling.
-   Includes a same-period DCA-vs-lump comparison.
-3. **Statistical (distribution) mode** (Advanced): 10,000 paths bootstrapped from the window's
-   daily log returns with a deterministic seed; reports percentiles and the share of paths above
-   target, labeled "model-based estimate" with methodology and limitations.
+CMVNG Simulation v3.0.0 is behavior-locked. Money is allocated and rounded in integer cents; units and market prices remain continuous. Any intentional numerical change requires an explicit methodology change record and model-version decision.
 
-Supporting analyses derived from real (unscaled) history: **Reality Check** (target vs median
-absolute plan-length move / largest observed move, deterministic labels), **rolling windows**
-(plan re-run over every completed plan-length window → best/median/worst), derived best/worst
-scenario cards, drawdown along the path, break-even ladder, and "what if I wait for a dip".
+The three modes remain separated and labelled:
 
-## 4. Engine guarantees
+1. **Scenario simulation:** scaled historical shape anchored to the current market, never an observed backtest or forecast.
+2. **Historical backtest:** actual historical dates/prices with no scaling.
+3. **Statistical mode:** seeded bootstrap paths, labelled as model-based estimates.
 
-- **v1 equivalence**: `engine.test.js` embeds a verbatim copy of the original `runSim` and
-  `analyzeMarket`; with default options the new engine must match them exactly.
-- **Invariants tested**: contributions sum to capital; cumulative units never decrease;
-  avgEntry = invested/units; value = units × price; fees ≥ 0 and reduce units; hybrid(0%) ≡ DCA,
-  hybrid(100%) ≡ lump sum; no NaN/Infinity; Monte Carlo deterministic per seed with ordered
-  percentiles; validation rejects garbage and flags cleaned data.
-- **Model versioning**: results and saved plans carry `MODEL_VERSION`; bump it whenever a
-  calculation changes.
+Public `/plan/<id>` pages, hash `#p=` shares, local plans, cards, tracking, and backtests all remain part of this path.
 
-## 5. API proxy (`api/coins.js`)
+## Contract analyzer data flow
 
-| Endpoint | Purpose | Edge cache |
+1. The user submits a contract or mint address.
+2. `/api/token` searches GeckoTerminal, discards every fuzzy/non-exact relationship, and ranks active exact pools by liquidity then volume.
+3. The response retains network, pool, token side, DEX, counter token, market snapshot, alternatives, provider, and resolution time.
+4. `/api/candles` validates network/pool/token/timeframe parameters, asks GeckoTerminal for token-oriented OHLCV, verifies pool metadata, and returns sorted unique valid candles.
+5. On a pool or timeframe change, prior candles and plan output are cleared; aborted or stale requests cannot replace the selected context.
+6. Onchain ladder v1 either blocks weak evidence or creates four descending ranges with 15/20/25/40 percent budget allocation.
+7. The chart draws only returned historical candles and horizontal scenario references. A transparent autoscaling series ensures Fit includes distant plan levels without fabricating price data.
+
+## Onchain methodology and honesty rules
+
+- The ladder is price-triggered, not calendar DCA and not the established v3 simulator.
+- Repeated swing-low support requires at least two clustered historical touches.
+- Support-based mode also requires at least seven elapsed days in the selected chart interval.
+- Fallbacks are labelled volatility references; they are never called structural support.
+- At least 30 valid candles, 24 elapsed hours, $10,000 pool liquidity, and a reasonably aligned live quote/latest candle are required before any ladder is shown.
+- Confidence uses elapsed duration plus candle count, liquidity, volume, pool age, volatility, and quote/candle divergence.
+- Goal equals the selected gain percentage above simulated weighted average entry, exactly.
+- Missing market cap, FDV, change, or transaction data remains unavailable rather than becoming zero or borrowing another field.
+- Market-data confidence says nothing about honeypots, taxes, authorities, holders, deployer behavior, LP state, or sellability.
+- No executable quote is requested yet; displayed levels exclude real price impact, routing, tax, gas, and slippage.
+
+## API and caching
+
+| Route | Provider/purpose | Typical cache policy |
 |---|---|---|
-| `?type=list` | Top 250 (3 pages, stables/wrapped filtered) → `{fetchedAt, coins}` | 12 h |
-| `?type=history&id=X` | 365-day daily history → `{prices…, fetchedAt}` | 12 h |
-| `?type=price&id=X` | Live price + 24h → `{fetchedAt, data}` | 60 s |
-| `?type=image&url=X` | CORS-safe image proxy (CoinGecko CDN allow-list) | 7 d |
+| `/api/coins?type=list|history` | CoinGecko established-asset data | 12 h |
+| `/api/coins?type=price` | CoinGecko live price | 60 s |
+| `/api/coins?type=image` | Allow-listed CoinGecko image proxy | 7 d |
+| `/api/token?address=...` | GeckoTerminal exact pool discovery | 60 s + stale window |
+| `/api/candles?...` | GeckoTerminal OHLCV | timeframe-dependent short cache |
+| `/api/plans` | Public plan create/get/revoke | no-store |
 
-Ids validated (`^[a-z0-9-]{1,64}$`); 429s pass through with Retry-After and a human message;
-every invocation (≈ edge-cache miss) logs `{type, status, ms}` as JSON. The client
-(`services/api.js`) layers a localStorage cache with stale-fallback and surfaces
-`fetchedAt`/`stale` so the UI always shows "Updated X ago" and labels stale data.
+The standalone server caches successful GET responses only and includes the HTTP method in its cache key. Error and non-GET responses are never replayed from the GET cache.
 
-## 6. Sharing & retention
-
-- **Cards**: three canvas formats with CMVNG branding, plan, headline, scenarios, model label and
-  the non-advice footer. Profit color is always by sign, never by market verdict.
-- **Links**: `#p=<base64url config>` rebuilds the plan client-side; contains no personal data;
-  decode is strictly validated. Server-stored `/plan/<id>` pages are future work (needs a DB).
-- **Saved plans** (localStorage, ≤30) store config, headline, seed and model version.
-  **Tracking** compares plan vs reality using real daily prices since activation (labeled
-  approximation).
-
-## 7. Honesty rules baked into the UI
-
-Targets are "scenarios you choose", never forecasts; historical outputs are "observations, not
-probabilities"; the probability-like Monte Carlo number is labeled model-based with disclosed
-assumptions; the score is the "CMVNG Model Score (heuristic)" with a how-it-works panel; all
-live data is timestamped and stale data labeled; the methodology panel ("How CMVNG calculates
-this") covers data source, windows, normalization, schedule, fees, scenarios, score and
-limitations.
-
-## 8. Running & validating
+## Running and validating
 
 ```bash
-npm install
-npm run dev     # /api/coins served locally by vite middleware (same edge handler as prod)
-npm test        # 30 engine tests
-npm run build   # main bundle ~73KB gzip; share/backtest/MC/saved-plans lazy-loaded
+npm ci
+npm run dev
+npm run lint
+npm test
+npm run build
+npm run smoke
+npm run smoke:onchain
+npm run e2e:plans
 ```
 
-Visual/runtime QA: Playwright smoke script (mocked API) drives coin selection → simulation →
-share card → save plan → backtest → mobile viewports; see CHECKPOINT for the latest run.
+Browser harnesses accept `CHROME_PATH`. The latest exact results and environment-specific blockers live in `docs/CHECKPOINT.md`.
 
-## 9. Status & open items
+## Current priorities
 
-See `docs/CHECKPOINT.md` (current status, known limitations, next steps) and `docs/MEMORY.md`
-(decisions and their reasons). Headlines: not deployed from this branch; no CI yet; no SSR SEO
-pages; share links are client-encoded only.
+The implementation baseline is complete, but trustworthy public launch still requires contract-security enrichment, independent sell simulation, executable size-aware quotes, abuse protection, and cross-pool divergence rules. See `docs/RECOMMENDATIONS.md` for the ordered backlog.
 
----
-
-*Updated 2026-08-27 during the v2 upgrade on branch `claude/project-docs-checkpoint-ywkwop`.*
-
-
----
-
-## Addendum — 2026-08-27 redesign runs (current state)
-
-The UI described above was subsequently re-skinned twice in one day; the
-current system is **CLEAR BLUE** (see DESIGN.md): light blue-grey backdrop,
-floating white cards, Plus Jakarta Sans, pill chips, one #2E6BF0 accent,
-hero numeral + delta badge, scenario stress-test bars, three-cell robustness.
-New since the original write-up: `src/components/results/ScenarioBars.jsx`
-(replaces the scenario grid/ruler), `src/components/AssumptionsDrawer.jsx`,
-`src/components/PublicPlanView.jsx`, brand assets in `src/assets/`,
-server-stored public plans (`api/plans.js` + `src/lib/planApi.js`,
-docs/PUBLIC_PLANS.md), ESLint + GitHub Actions CI, gate harnesses
-`tools/smoke.mjs` and `tools/plans-e2e.mjs`, `behaviorLock.test.js`
-(engine outputs frozen — 40/40 tests), and a standalone `server.js` used by
-the Railway deployment (volume-backed PLANS_DIR=/data). The simulation engine
-itself is unchanged from the description above; docs/MCR-001 tracks the one
-open methodology question (integer-cent money).
+*Updated 2026-08-30 for CMVNG Simulation v3.0.0 and Onchain ladder v1.*

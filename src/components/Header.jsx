@@ -10,12 +10,14 @@ export default function Header({ onOpenSaved, savedCount }) {
         <span style={{ fontFamily: SANS, fontWeight: 700, fontSize: 17, color: T.ink, letterSpacing: "-0.01em" }}>cmvng</span>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <a href="/contract" aria-label="Analyze a token contract" style={{ ...pillSoft, border: "none", cursor: "pointer", textDecoration: "none", whiteSpace: "nowrap" }}>
+          Contract
+        </a>
         {savedCount > 0 && (
           <button onClick={onOpenSaved} style={{ ...pillSoft, border: "none", cursor: "pointer" }}>
             My plans ({savedCount})
           </button>
         )}
-        <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 600, color: T.ink3, whiteSpace: "nowrap" }}>Live · Top 250</span>
       </div>
     </nav>
   );
