@@ -1,24 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import DcaChart from "./DcaChart.jsx";
-import ExecutionMap from "./ExecutionMap.jsx";
 import OnchainSharePanel from "./OnchainSharePanel.jsx";
-import PlanOutcome from "./PlanOutcome.jsx";
-import PlanProfileSelector from "./PlanProfileSelector.jsx";
-import { buildDcaPlans, DCA_PROFILES } from "../lib/onchain/dcaEngine.js";
+import ScheduledDcaChart from "./ScheduledDcaChart.jsx";
+import ScheduledPlanSummary from "./ScheduledPlanSummary.jsx";
 import {
-  buildIllustrativePlanTouches,
-} from "../lib/onchain/planTouches.js";
+  buildScheduledDcaPlan,
+  SCHEDULED_DCA_FREQUENCIES,
+} from "../lib/onchain/scheduledDca.js";
 import { compactAddress, formatPercent, formatPrice, formatUsd } from "../lib/onchain/formatters.js";
 import { getPoolCandles, resolveContract } from "../services/onchainApi.js";
 import { LogoMark } from "./ui.jsx";
 import "../onchain.css";
 
 const TIMEFRAMES = [
-  { id: "5m", label: "5M", ariaLabel: "5 minute candles", timeframe: "minute", aggregate: 5, seconds: 300, limit: 500 },
-  { id: "15m", label: "15M", ariaLabel: "15 minute candles", timeframe: "minute", aggregate: 15, seconds: 900, limit: 500 },
-  { id: "1h", label: "1H", ariaLabel: "1 hour candles", timeframe: "hour", aggregate: 1, seconds: 3_600, limit: 500 },
-  { id: "4h", label: "4H", ariaLabel: "4 hour candles", timeframe: "hour", aggregate: 4, seconds: 14_400, limit: 500 },
-  { id: "1d", label: "1D", ariaLabel: "1 day candles", timeframe: "day", aggregate: 1, seconds: 86_400, limit: 500 },
+  { id: "1h", label: "1H", timeframe: "hour", aggregate: 1, seconds: 3_600, limit: 500 },
+  { id: "4h", label: "4H", timeframe: "hour", aggregate: 4, seconds: 14_400, limit: 500 },
+  { id: "1d", label: "1D", timeframe: "day", aggregate: 1, seconds: 86_400, limit: 500 },
 ];
 
 const VALUE_MODES = [
@@ -26,8 +22,6 @@ const VALUE_MODES = [
   { id: "marketCap", label: "MCAP" },
   { id: "fdv", label: "FDV" },
 ];
-const TARGET_OPTIONS = [25, 50, 100, 200];
-const DURATION_OPTIONS = [7, 14, 30, 45, 60, 90];
 
 const NETWORK_NAMES = {
   eth: "Ethereum",
@@ -41,51 +35,79 @@ const NETWORK_NAMES = {
   avax: "Avalanche",
 };
 
+const DEFAULT_FREQUENCY_ID = "daily";
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const finiteNumber = value => value !== null
+  && value !== undefined
+  && value !== ""
+  && Number.isFinite(Number(value));
+
+function frequencyById(id) {
+  return SCHEDULED_DCA_FREQUENCIES.find(item => item.id === id)
+    || SCHEDULED_DCA_FREQUENCIES.find(item => item.id === DEFAULT_FREQUENCY_ID)
+    || SCHEDULED_DCA_FREQUENCIES[0];
+}
+
+function evidenceTimeframeForFrequency(frequencyId) {
+  const frequency = frequencyById(frequencyId);
+  if (!frequency || frequency.seconds <= 6 * 3_600) return TIMEFRAMES[0];
+  if (frequency.seconds <= 86_400) return TIMEFRAMES[1];
+  return TIMEFRAMES[2];
+}
 
 function readAnalyzerQuery() {
-  if (typeof window === "undefined") {
-    return { address: "", pool: "", timeframe: "4h", amount: 500, duration: 30, profile: "balanced", unit: "marketCap", target: "auto", touches: false };
-  }
+  const fallback = {
+    address: "",
+    pool: "",
+    amount: 500,
+    duration: 30,
+    frequency: DEFAULT_FREQUENCY_ID,
+    target: 100,
+    unit: "marketCap",
+  };
+  if (typeof window === "undefined") return fallback;
+
   const params = new URLSearchParams(window.location.search);
-  const requestedTimeframe = params.get("interval") || "4h";
-  const requestedProfile = params.get("plan") || "balanced";
+  const numberParam = key => {
+    const value = params.get(key);
+    return value === null ? NaN : Number(value);
+  };
+  const amount = numberParam("amount");
+  const duration = numberParam("duration");
+  const target = numberParam("target");
+  const requestedFrequency = params.get("frequency") || DEFAULT_FREQUENCY_ID;
   const requestedUnit = params.get("unit") || "marketCap";
-  const targetParam = params.get("target") || "auto";
-  const amountParam = params.get("amount");
-  const durationParam = params.get("duration");
-  const parsedAmount = amountParam === null ? NaN : Number(amountParam);
-  const parsedDuration = durationParam === null ? NaN : Number(durationParam);
-  const parsedTarget = Number(targetParam);
+
   return {
     address: params.get("address") || "",
     pool: params.get("pool") || "",
-    timeframe: TIMEFRAMES.some(item => item.id === requestedTimeframe) ? requestedTimeframe : "4h",
-    amount: Number.isFinite(parsedAmount) && parsedAmount > 0 ? clamp(parsedAmount, 1, 10_000_000) : 500,
-    duration: Number.isFinite(parsedDuration) ? Math.round(clamp(parsedDuration, 7, 90)) : 30,
-    profile: DCA_PROFILES.some(item => item.id === requestedProfile) ? requestedProfile : "balanced",
-    unit: VALUE_MODES.some(item => item.id === requestedUnit) ? requestedUnit : "marketCap",
-    target: targetParam === "auto" || !Number.isFinite(parsedTarget) ? "auto" : String(clamp(parsedTarget, 5, 500)),
-    touches: params.get("touches") === "1",
+    amount: finiteNumber(amount) && amount > 0 ? clamp(amount, 1, 10_000_000) : fallback.amount,
+    duration: finiteNumber(duration) ? Math.round(clamp(duration, 7, 90)) : fallback.duration,
+    frequency: frequencyById(requestedFrequency)?.id || fallback.frequency,
+    target: finiteNumber(target) ? clamp(target, 5, 500) : fallback.target,
+    unit: VALUE_MODES.some(item => item.id === requestedUnit) ? requestedUnit : fallback.unit,
   };
 }
 
-function syncAnalyzerUrl({ address, asset, timeframeId, capital, reviewDays, profileId, valueMode, targetChoice, showTouches }) {
+function syncAnalyzerUrl({ address, asset, inputs, valueMode, timeframeId }) {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
   const setOrDelete = (key, value) => {
     if (value === null || value === undefined || value === "") url.searchParams.delete(key);
     else url.searchParams.set(key, String(value));
   };
+
   setOrDelete("address", address);
   setOrDelete("pool", asset ? `${asset.network}:${asset.poolAddress}` : "");
-  setOrDelete("interval", timeframeId);
-  setOrDelete("amount", capital);
-  setOrDelete("duration", reviewDays);
-  setOrDelete("plan", profileId);
+  setOrDelete("amount", inputs.totalUsd);
+  setOrDelete("duration", inputs.durationDays);
+  setOrDelete("frequency", inputs.frequencyId);
+  setOrDelete("target", inputs.targetPct);
   setOrDelete("unit", valueMode);
-  setOrDelete("target", targetChoice);
-  setOrDelete("touches", showTouches ? "1" : "");
+  // Retained for backward-compatible deep links; this is evidence, not buy cadence.
+  setOrDelete("interval", timeframeId);
+  url.searchParams.delete("plan");
+  url.searchParams.delete("touches");
   window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
@@ -98,74 +120,59 @@ function TokenLogo({ token }) {
   return <img className="token-logo" src={token.image} alt="" onError={() => setFailed(true)} />;
 }
 
-function Metric({ label, value, tone = "" }) {
-  return (
-    <div className="metric-card">
-      <span>{label}</span>
-      <strong className={tone}>{value}</strong>
-    </div>
-  );
-}
-
 function formatHistorySpan(days) {
-  if (!Number.isFinite(days) || days <= 0) return "—";
+  if (!finiteNumber(days) || days <= 0) return "—";
   if (days < 2) return `${Math.round(days * 24)} hours`;
-  return `${days < 10 ? days.toFixed(1) : Math.round(days)} days`;
+  return `${days < 10 ? Number(days).toFixed(1) : Math.round(days)} days`;
 }
 
 function formatAgeHours(hours) {
-  if (!Number.isFinite(hours) || hours < 0) return "—";
+  if (!finiteNumber(hours) || hours < 0) return "—";
   if (hours < 1) return "Less than 1 hour";
   if (hours < 48) return `${Math.round(hours)} hours`;
   return formatHistorySpan(hours / 24);
 }
 
-function formatUtcDate(value) {
-  const timestamp = Date.parse(value || "");
-  if (!Number.isFinite(timestamp)) return "—";
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(timestamp));
+function stableSeed(parts) {
+  let hash = 2_166_136_261;
+  for (const character of parts.join("|").toLowerCase()) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return hash >>> 0;
 }
 
-function valueFromProjection(projection, valueMode) {
-  if (!projection) return null;
-  if (valueMode === "marketCap") return projection.marketCapUsd;
-  if (valueMode === "fdv") return projection.fdvUsd;
-  return projection.priceUsd;
+function estimatedSchedule({ totalUsd, durationDays, frequencyId }) {
+  const frequency = frequencyById(frequencyId);
+  const safeAmount = clamp(Number(totalUsd) || 1, 1, 10_000_000);
+  const safeDays = Math.round(clamp(Number(durationDays) || 30, 7, 90));
+  const purchaseCount = Math.max(1, Math.ceil((safeDays * 86_400) / Math.max(1, frequency?.seconds || 86_400)));
+  return {
+    purchaseCount,
+    amountPerBuyUsd: safeAmount / purchaseCount,
+    frequencyLabel: frequency?.label || "Every day",
+  };
 }
 
-function formatProjectedValue(projection, valueMode) {
-  const value = valueFromProjection(projection, valueMode);
-  if (!Number.isFinite(Number(value)) || Number(value) <= 0) return "Unavailable";
-  return valueMode === "price" ? formatPrice(value) : formatUsd(value, { compact: true });
+function volatilityLabel(plan, candleLoading) {
+  if (candleLoading) return { category: "Calculating", measure: "—", detail: "Reading recent price swings" };
+  const volatility = plan?.volatility;
+  if (!volatility) return { category: "Unavailable", measure: "—", detail: "Not enough usable market history" };
+  return {
+    category: volatility.category || "Measured",
+    measure: finiteNumber(volatility.typicalDailySwingPct)
+      ? `~${Number(volatility.typicalDailySwingPct).toFixed(1)}% daily`
+      : "Measured",
+    detail: finiteNumber(volatility.typicalDailySwingPct)
+      ? `Typical daily swing ${Number(volatility.typicalDailySwingPct).toFixed(1)}%`
+      : "Based on recent pool candles",
+  };
 }
 
-function RiskMeter({ quality }) {
-  const tone = quality.canPlan
-    ? quality.score >= 78 ? "good" : quality.score >= 55 ? "warn" : "danger"
-    : "danger";
-  const scoreLabel = !quality.canPlan
-    ? "Plan requirements not met"
-    : quality.score >= 78
-      ? "Higher-quality evidence"
-      : quality.score >= 55
-        ? "Moderate-quality evidence"
-        : "Limited-quality evidence";
-  return (
-    <div className={`risk-meter risk-meter--${tone}`}>
-      <div>
-        <span>Market-data quality</span>
-        <strong>{scoreLabel}</strong>
-      </div>
-      <div className="risk-meter__score" aria-label={`Market-data quality score ${quality.score} out of 100`}>
-        {quality.score}<small>/100</small>
-      </div>
-    </div>
-  );
+function plainAssumption(value) {
+  return String(value)
+    .replace("Every B marker", "Every BUY marker")
+    .replace("S and X", "TARGET CLOSE and RISK REVIEW");
 }
 
 export default function OnchainAnalyzer() {
@@ -181,73 +188,95 @@ export default function OnchainAnalyzer() {
   const [candleRequestVersion, setCandleRequestVersion] = useState(0);
   const [resolvedAt, setResolvedAt] = useState(null);
   const [candlesAt, setCandlesAt] = useState(null);
-  const [timeframeId, setTimeframeId] = useState(initialQuery.timeframe);
-  const [capital, setCapital] = useState(initialQuery.amount);
-  const [capitalInput, setCapitalInput] = useState(String(initialQuery.amount));
-  const [reviewDays, setReviewDays] = useState(initialQuery.duration);
-  const [selectedProfileId, setSelectedProfileId] = useState(initialQuery.profile);
   const [valueMode, setValueMode] = useState(initialQuery.unit);
-  const [targetChoice, setTargetChoice] = useState(initialQuery.target);
-  const [showIllustrativeTouches, setShowIllustrativeTouches] = useState(initialQuery.touches);
   const [copied, setCopied] = useState(false);
+  const [hasGenerated, setHasGenerated] = useState(Boolean(initialQuery.address));
+  const [planInputs, setPlanInputs] = useState({
+    totalUsd: initialQuery.amount,
+    durationDays: initialQuery.duration,
+    frequencyId: initialQuery.frequency,
+    targetPct: initialQuery.target,
+  });
+  const [amountInput, setAmountInput] = useState(String(initialQuery.amount));
+  const [durationInput, setDurationInput] = useState(String(initialQuery.duration));
+  const [frequencyInput, setFrequencyInput] = useState(initialQuery.frequency);
+  const [targetInput, setTargetInput] = useState(String(initialQuery.target));
+
   const resolveController = useRef(null);
   const candleController = useRef(null);
   const resolveRequestId = useRef(0);
   const candleRequestId = useRef(0);
   const initialUrlScanStarted = useRef(false);
-  const resultsRef = useRef(null);
+  const workspaceRef = useRef(null);
+  const planResultRef = useRef(null);
+  const technicalDetailsRef = useRef(null);
+  const pendingPlanFocus = useRef(false);
 
   const timeframe = useMemo(
-    () => TIMEFRAMES.find(item => item.id === timeframeId) || TIMEFRAMES[3],
-    [timeframeId],
+    () => evidenceTimeframeForFrequency(planInputs.frequencyId),
+    [planInputs.frequencyId],
   );
   const market = useMemo(() => asset?.market || {}, [asset?.market]);
-  const planSet = useMemo(
-    () => buildDcaPlans({
+  const simulationSeed = useMemo(
+    () => stableSeed([
+      asset?.token?.address || address,
+      planInputs.totalUsd,
+      planInputs.durationDays,
+      planInputs.frequencyId,
+      planInputs.targetPct,
+    ]),
+    [address, asset?.token?.address, planInputs],
+  );
+  const scheduledPlan = useMemo(() => {
+    if (!asset) return null;
+    return buildScheduledDcaPlan({
       candles,
       market,
-      capital,
-      durationDays: reviewDays,
-      targetPct: targetChoice === "auto" ? null : Number(targetChoice),
+      totalUsd: planInputs.totalUsd,
+      frequencyId: planInputs.frequencyId,
+      durationDays: planInputs.durationDays,
+      targetPct: planInputs.targetPct,
       expectedIntervalSeconds: timeframe.seconds,
       dataAsOf: candlesAt,
-    }),
-    [candles, candlesAt, market, capital, reviewDays, targetChoice, timeframe.seconds],
-  );
-  const selectedPlan = useMemo(
-    () => planSet.profiles.find(item => item.profileId === selectedProfileId) || planSet.profiles[1] || planSet.profiles[0],
-    [planSet.profiles, selectedProfileId],
-  );
-  const selectedProfile = useMemo(
-    () => DCA_PROFILES.find(item => item.id === selectedPlan?.profileId) || DCA_PROFILES[1],
-    [selectedPlan?.profileId],
-  );
-  const illustrativeEvents = useMemo(
-    () => showIllustrativeTouches && selectedPlan?.quality?.canPlan
-      ? buildIllustrativePlanTouches({ candles, plan: selectedPlan })
-      : [],
-    [candles, selectedPlan, showIllustrativeTouches],
-  );
-  const reviewBy = formatUtcDate(planSet.monitoringWindow.reviewAt);
+      seed: simulationSeed,
+    });
+  }, [asset, candles, candlesAt, market, planInputs, simulationSeed, timeframe.seconds]);
   const candleReady = candleState === "done";
   const candleLoading = candleState === "idle" || candleState === "loading";
-  const canShowPlan = candleReady && selectedPlan?.quality?.canPlan;
-  const planHeading = candleLoading
-    ? "Analyzing real pool candles"
-    : candleState === "error"
-      ? "Candle data unavailable"
-      : selectedPlan.mode === "blocked"
-        ? "Plans need more evidence"
-        : `${selectedPlan.profileName} map ready`;
-
+  const canShowPlan = Boolean(hasGenerated && candleReady && scheduledPlan?.canSimulate);
+  const generatedFrequency = scheduledPlan?.frequency || frequencyById(planInputs.frequencyId);
+  const draftEstimate = useMemo(
+    () => estimatedSchedule({
+      totalUsd: amountInput,
+      durationDays: durationInput,
+      frequencyId: frequencyInput,
+    }),
+    [amountInput, durationInput, frequencyInput],
+  );
+  const volatility = volatilityLabel(scheduledPlan, candleLoading);
+  const selectedNetwork = NETWORK_NAMES[asset?.network] || asset?.network || "Unknown network";
+  const dexName = typeof asset?.dex === "string" ? asset.dex : asset?.dex?.name || asset?.dex?.id || "Unknown DEX";
+  const selectedPoolKey = asset ? `${asset.network}:${asset.poolAddress}` : "";
+  const uniqueNetworks = new Set(poolOptions.map(option => option.network));
+  const poolPageUrl = asset
+    ? `https://www.geckoterminal.com/${encodeURIComponent(asset.network)}/pools/${encodeURIComponent(asset.poolAddress)}`
+    : null;
+  const lowLiquidity = finiteNumber(market.liquidityUsd) && Number(market.liquidityUsd) < 50_000;
+  const valuationWarnings = useMemo(() => {
+    if (
+      finiteNumber(market.marketCapUsd)
+      && finiteNumber(market.fdvUsd)
+      && Number(market.marketCapUsd) > Number(market.fdvUsd) * 1.05
+    ) {
+      return ["Reported market cap exceeds FDV. Verify the provider values before using valuation projections."];
+    }
+    return [];
+  }, [market.fdvUsd, market.marketCapUsd]);
   useEffect(() => {
     if (!asset) return;
-    if (valueMode === "marketCap" && !planSet.valuationScales.marketCap.available) {
-      setValueMode("price");
-    } else if (valueMode === "fdv" && !planSet.valuationScales.fdv.available) {
-      setValueMode("price");
-    }
-  }, [asset, planSet.valuationScales, valueMode]);
+    if (valueMode === "marketCap" && !finiteNumber(market.marketCapUsd)) setValueMode("price");
+    else if (valueMode === "fdv" && !finiteNumber(market.fdvUsd)) setValueMode("price");
+  }, [asset, market.fdvUsd, market.marketCapUsd, valueMode]);
 
   useEffect(() => {
     const canonicalAddress = asset?.token?.address
@@ -257,15 +286,21 @@ export default function OnchainAnalyzer() {
     syncAnalyzerUrl({
       address: canonicalAddress,
       asset,
-      timeframeId,
-      capital,
-      reviewDays,
-      profileId: selectedProfileId,
+      inputs: planInputs,
       valueMode,
-      targetChoice,
-      showTouches: showIllustrativeTouches,
+      timeframeId: timeframe.id,
     });
-  }, [address, asset, capital, initialQuery.address, resolveState, reviewDays, selectedProfileId, showIllustrativeTouches, targetChoice, timeframeId, valueMode]);
+  }, [address, asset, initialQuery.address, planInputs, resolveState, timeframe.id, valueMode]);
+
+  useEffect(() => {
+    if (!canShowPlan || !pendingPlanFocus.current) return;
+    pendingPlanFocus.current = false;
+    const timer = window.setTimeout(() => {
+      planResultRef.current?.focus({ preventScroll: true });
+      planResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 30);
+    return () => window.clearTimeout(timer);
+  }, [canShowPlan, scheduledPlan]);
 
   const cancelCurrentCandles = useCallback(() => {
     candleRequestId.current += 1;
@@ -295,6 +330,7 @@ export default function OnchainAnalyzer() {
     setAsset(null);
     setResolvedAt(null);
     setCandlesAt(null);
+    setHasGenerated(true);
 
     try {
       const payload = await resolveContract(value, { signal: controller.signal });
@@ -307,8 +343,8 @@ export default function OnchainAnalyzer() {
       setResolveState("done");
       window.setTimeout(() => {
         if (requestId !== resolveRequestId.current) return;
-        resultsRef.current?.focus({ preventScroll: true });
-        resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        workspaceRef.current?.focus({ preventScroll: true });
+        workspaceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 50);
     } catch (error) {
       if (error.name === "AbortError" || requestId !== resolveRequestId.current) return;
@@ -318,13 +354,11 @@ export default function OnchainAnalyzer() {
   }, [address, cancelCurrentCandles]);
 
   useEffect(() => {
-    if (initialUrlScanStarted.current) return;
-    const initialAddress = initialQuery.address;
-    if (!initialAddress) return;
+    if (initialUrlScanStarted.current || !initialQuery.address) return;
     const timer = window.setTimeout(() => {
       if (initialUrlScanStarted.current) return;
       initialUrlScanStarted.current = true;
-      scan(initialAddress);
+      scan(initialQuery.address);
     }, 0);
     return () => window.clearTimeout(timer);
   }, [initialQuery.address, scan]);
@@ -359,7 +393,7 @@ export default function OnchainAnalyzer() {
       controller.abort();
       if (requestId === candleRequestId.current) candleRequestId.current += 1;
     };
-  }, [asset, timeframe, candleRequestVersion]);
+  }, [asset, candleRequestVersion, timeframe]);
 
   useEffect(() => () => {
     initialUrlScanStarted.current = false;
@@ -374,51 +408,11 @@ export default function OnchainAnalyzer() {
     try {
       await navigator.clipboard.writeText(asset.token.address);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1400);
+      window.setTimeout(() => setCopied(false), 1_400);
     } catch {
       setCopied(false);
     }
   };
-
-  const onCapitalChange = value => {
-    const filtered = value.replace(/[^0-9.]/g, "");
-    const [whole = "", ...fractionParts] = filtered.split(".");
-    const hasDecimal = filtered.includes(".");
-    const fraction = fractionParts.join("").slice(0, 2);
-    const nextInput = `${whole}${hasDecimal ? `.${fraction}` : ""}`;
-    if (!nextInput || nextInput === ".") {
-      setCapitalInput("");
-      setCapital(1);
-      return;
-    }
-    const next = clamp(Number(nextInput) || 1, 1, 10_000_000);
-    setCapitalInput(nextInput);
-    setCapital(next);
-  };
-
-  const commitCapital = () => {
-    const next = clamp(Number(capitalInput) || 1, 1, 10_000_000);
-    setCapital(next);
-    setCapitalInput(String(next));
-  };
-
-  const hasDayChange = market.change24h !== null
-    && market.change24h !== undefined
-    && Number.isFinite(Number(market.change24h));
-  const dayChange = hasDayChange ? Number(market.change24h) : null;
-  const hasTrades = market.transactions24h?.buys !== null
-    && market.transactions24h?.buys !== undefined
-    && market.transactions24h?.sells !== null
-    && market.transactions24h?.sells !== undefined;
-  const buys = hasTrades ? Number(market.transactions24h.buys) : null;
-  const sells = hasTrades ? Number(market.transactions24h.sells) : null;
-  const selectedNetwork = NETWORK_NAMES[asset?.network] || asset?.network || "Unknown network";
-  const dexName = typeof asset?.dex === "string" ? asset.dex : asset?.dex?.name || asset?.dex?.id || "Unknown DEX";
-  const poolPageUrl = asset
-    ? `https://www.geckoterminal.com/${encodeURIComponent(asset.network)}/pools/${encodeURIComponent(asset.poolAddress)}`
-    : null;
-  const selectedPoolKey = asset ? `${asset.network}:${asset.poolAddress}` : "";
-  const uniqueNetworks = new Set(poolOptions.map(option => option.network));
 
   const choosePool = event => {
     const next = poolOptions.find(option => `${option.network}:${option.poolAddress}` === event.target.value);
@@ -429,16 +423,7 @@ export default function OnchainAnalyzer() {
     setCandleError("");
     setCandleState("loading");
     setAsset(next);
-  };
-
-  const chooseTimeframe = id => {
-    if (id === timeframeId) return;
-    cancelCurrentCandles();
-    setCandles([]);
-    setCandlesAt(null);
-    setCandleError("");
-    setCandleState("loading");
-    setTimeframeId(id);
+    setHasGenerated(true);
   };
 
   const retryCandles = () => {
@@ -450,15 +435,48 @@ export default function OnchainAnalyzer() {
     setCandleRequestVersion(version => version + 1);
   };
 
-  const scrollTo = id => {
-    const destination = document.getElementById(id);
-    if (!destination) return;
-    destination.focus({ preventScroll: true });
-    destination.scrollIntoView({ behavior: "smooth", block: "start" });
+  const generatePlan = event => {
+    event.preventDefault();
+    const nextInputs = {
+      totalUsd: clamp(Number(amountInput) || 1, 1, 10_000_000),
+      durationDays: Math.round(clamp(Number(durationInput) || 30, 7, 90)),
+      frequencyId: frequencyById(frequencyInput)?.id || DEFAULT_FREQUENCY_ID,
+      targetPct: clamp(Number(targetInput) || 100, 5, 500),
+    };
+    const evidenceTimeframeChanged = evidenceTimeframeForFrequency(nextInputs.frequencyId).id !== timeframe.id;
+
+    setAmountInput(String(nextInputs.totalUsd));
+    setDurationInput(String(nextInputs.durationDays));
+    setFrequencyInput(nextInputs.frequencyId);
+    setTargetInput(String(nextInputs.targetPct));
+    setPlanInputs(nextInputs);
+    setHasGenerated(true);
+    pendingPlanFocus.current = true;
+
+    if (evidenceTimeframeChanged) {
+      cancelCurrentCandles();
+      setCandles([]);
+      setCandlesAt(null);
+      setCandleError("");
+      setCandleState("loading");
+    }
   };
-  const currentProjection = planSet.volatilityOutlook.current;
+
+  const openTechnicalDetails = () => {
+    if (!technicalDetailsRef.current) return;
+    technicalDetailsRef.current.open = true;
+    technicalDetailsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const quality = scheduledPlan?.quality || {};
+  const blockingReasons = scheduledPlan?.blockingReasons || [];
+  const planWarnings = scheduledPlan?.warnings || [];
+  const assumptions = scheduledPlan?.assumptions || [];
+  const generatedSchedule = scheduledPlan?.schedule;
+  const hasTrades = finiteNumber(market.transactions24h?.buys) && finiteNumber(market.transactions24h?.sells);
+
   return (
-    <div className="onchain-page">
+    <div className="onchain-page onchain-page--scheduled">
       <header className="onchain-header">
         <a className="onchain-header__brand" href="/" aria-label="CMVNG home">
           <LogoMark size={22} />
@@ -470,13 +488,13 @@ export default function OnchainAnalyzer() {
         </nav>
       </header>
 
-      <main className="onchain-app">
+      <main className="onchain-app onchain-app--simple">
         <section className={`contract-hero ${asset ? "contract-hero--resolved" : ""}`}>
           {!asset && (
             <>
-              <div className="eyebrow"><span className="live-dot" /> Onchain DCA Lab</div>
-              <h1>Paste a memecoin contract.<br /><span>See the whole DCA map.</span></h1>
-              <p>Choose a plan, see every potential buy and exit zone, then share one clean card. No generated future candles.</p>
+              <div className="eyebrow"><span className="live-dot" /> DCA simulator</div>
+              <h1>Paste a token contract.<br /><span>Get one simple DCA plan.</span></h1>
+              <p>Choose your amount, buying period, frequency and profit goal. The app uses recent volatility to build an illustrative plan.</p>
             </>
           )}
 
@@ -507,17 +525,15 @@ export default function OnchainAnalyzer() {
           <div className="visually-hidden" role="status" aria-live="polite">
             {resolveState === "loading"
               ? "Resolving the contract and exact pools."
-              : candleState === "done" && asset
-                  ? selectedPlan.quality.canPlan
-                    ? `Three DCA plans are ready from ${selectedPlan.quality.candleCount} candles.`
-                    : `Market chart ready with ${selectedPlan.quality.candleCount} candles. Plans need more evidence.`
-                  : ""}
+              : canShowPlan
+                ? `Plan ready: ${generatedSchedule?.purchaseCount || 0} planned buys, ${generatedFrequency?.label?.toLowerCase() || "on schedule"}, over ${generatedSchedule?.durationDays || planInputs.durationDays} days.`
+                : ""}
           </div>
         </section>
 
         {asset && (
-          <section className="token-workspace" ref={resultsRef} tabIndex={-1} aria-labelledby="onchain-token-title">
-            <div className="token-heading">
+          <section className="token-workspace token-workspace--simple" ref={workspaceRef} tabIndex={-1} aria-labelledby="onchain-token-title">
+            <div className="token-heading token-heading--simple">
               <div className="token-heading__identity">
                 <TokenLogo token={asset.token} />
                 <div>
@@ -533,146 +549,154 @@ export default function OnchainAnalyzer() {
               </div>
               <div className="token-heading__price">
                 <strong>{formatPrice(market.priceUsd)}</strong>
-                <span className={hasDayChange ? (dayChange >= 0 ? "positive" : "negative") : ""}>
-                  {hasDayChange ? `${dayChange >= 0 ? "▲" : "▼"} ${formatPercent(dayChange)} · 24h` : "24h change unavailable"}
-                </span>
-                {canShowPlan && <button type="button" className="token-card-link" onClick={() => scrollTo("share-plan-card")}>Customize share card</button>}
+                <span>{finiteNumber(market.change24h) ? `${Number(market.change24h) >= 0 ? "▲" : "▼"} ${formatPercent(market.change24h)} · 24h` : "Live pool price"}</span>
               </div>
             </div>
 
-            <div className="metrics-strip metrics-strip--key" role="region" aria-label="Selected pool market metrics">
-              <Metric label="Market cap" value={market.marketCapUsd ? formatUsd(market.marketCapUsd, { compact: true }) : "Unverified"} />
-              <Metric label="FDV" value={market.fdvUsd ? formatUsd(market.fdvUsd, { compact: true }) : "Unavailable"} />
-              <Metric label="Liquidity" value={formatUsd(market.liquidityUsd, { compact: true })} tone={market.liquidityUsd < 50_000 ? "warn" : ""} />
-              <Metric label="24h volume" value={formatUsd(market.volume24h, { compact: true })} />
+            <div className="simple-token-facts" aria-label="Token overview">
+              <div>
+                <span>Market cap</span>
+                <strong>{finiteNumber(market.marketCapUsd) ? formatUsd(market.marketCapUsd, { compact: true }) : "Unavailable"}</strong>
+              </div>
+              <div>
+                <span>FDV</span>
+                <strong>{finiteNumber(market.fdvUsd) ? formatUsd(market.fdvUsd, { compact: true }) : "Unavailable"}</strong>
+              </div>
+              <div className="simple-token-facts__volatility">
+                <span>Volatility</span>
+                <strong>{volatility.category} · {volatility.measure}</strong>
+                <small>{volatility.detail}</small>
+              </div>
             </div>
 
-            <details className="market-source">
-              <summary>Market source · {dexName} / {asset.counterToken?.symbol || "?"}</summary>
-              <div className={`pool-selector ${uniqueNetworks.size > 1 ? "pool-selector--ambiguous" : ""}`}>
+            {lowLiquidity && (
+              <div className="simple-risk-alert" role="note">
                 <div>
-                  <label htmlFor="pool-source">Chart source</label>
-                  <span>{uniqueNetworks.size > 1 ? "This address appears on multiple networks. Confirm the intended pool." : "The highest-liquidity exact-match pool was selected automatically."}</span>
+                  <strong>Low-liquidity pool</strong>
+                  <span>{formatUsd(market.liquidityUsd)} observed liquidity can cause large slippage.</span>
                 </div>
-                <select id="pool-source" value={selectedPoolKey} onChange={choosePool} disabled={poolOptions.length < 2}>
-                  {poolOptions.map(option => {
-                    const optionDex = typeof option.dex === "string" ? option.dex : option.dex?.name || option.dex?.id || "DEX";
-                    const optionNetwork = NETWORK_NAMES[option.network] || option.network;
-                    return (
-                      <option key={`${option.network}:${option.poolAddress}`} value={`${option.network}:${option.poolAddress}`}>
-                        {optionNetwork} · {optionDex} · {option.counterToken?.symbol || "?"} · {compactAddress(option.poolAddress, 6, 4)} · {formatUsd(option.market?.liquidityUsd, { compact: true })}
-                      </option>
-                    );
-                  })}
-                </select>
+                <button type="button" onClick={openTechnicalDetails}>Check pool</button>
               </div>
-            </details>
-
-            <section className="plan-studio" id="plan-builder" tabIndex={-1} aria-labelledby="plan-builder-title">
-              <header className="plan-studio__heading">
+            )}
+            {uniqueNetworks.size > 1 && (
+              <div className="simple-risk-alert" role="note">
                 <div>
-                  <span>1 · Set the plan</span>
-                  <h3 id="plan-builder-title">How much, how long, and what risk style?</h3>
-                  <p>Price-trigger buys may never fill. Duration is the monitoring window, not a promised completion date.</p>
+                  <strong>Confirm the intended network</strong>
+                  <span>This address appears on more than one network or pool.</span>
                 </div>
-                <span className="simulation-pill">Planned · not executed</span>
+                <button type="button" onClick={openTechnicalDetails}>Choose pool</button>
+              </div>
+            )}
+
+            <section className="simple-plan-builder" id="plan-builder" aria-labelledby="plan-builder-title">
+              <header>
+                <span>Build your plan</span>
+                <h3 id="plan-builder-title">Tell us how you want to DCA</h3>
+                <p>We calculate the buy schedule and risk levels from the token&apos;s recent volatility.</p>
               </header>
 
-              <div className="plan-builder-fields">
-                <label>
-                  Total DCA amount
-                  <div className="money-input"><span>$</span><input inputMode="decimal" value={capitalInput} onChange={event => onCapitalChange(event.target.value)} onBlur={commitCapital} aria-label="Total DCA budget in US dollars" /></div>
-                </label>
-                <label>
-                  Monitoring duration
-                  <select value={reviewDays} onChange={event => setReviewDays(Number(event.target.value))}>
-                    {!DURATION_OPTIONS.includes(reviewDays) && <option value={reviewDays}>{reviewDays} days</option>}
-                    {DURATION_OPTIONS.map(value => <option key={value} value={value}>{value} days</option>)}
-                  </select>
-                </label>
-                <label>
-                  Conditional S1 target
-                  <select value={targetChoice} onChange={event => setTargetChoice(event.target.value)}>
-                    <option value="auto">Auto · from volatility</option>
-                    {targetChoice !== "auto" && !TARGET_OPTIONS.includes(Number(targetChoice)) && (
-                      <option value={targetChoice}>Custom · +{targetChoice}% from avg</option>
-                    )}
-                    {TARGET_OPTIONS.map(value => <option key={value} value={value}>Custom · +{value}% from avg</option>)}
-                  </select>
-                </label>
-              </div>
-
-              <div className="plan-builder-status">
-                <div>
-                  <span>{timeframe.label} evidence</span>
-                  <strong>{planHeading}</strong>
+              <form onSubmit={generatePlan}>
+                <div className="simple-plan-fields">
+                  <label>
+                    Total amount
+                    <div className="simple-input-affix">
+                      <span>$</span>
+                      <input
+                        inputMode="decimal"
+                        value={amountInput}
+                        onChange={event => setAmountInput(event.target.value.replace(/[^0-9.]/g, ""))}
+                        aria-label="Total amount to invest in US dollars"
+                      />
+                    </div>
+                  </label>
+                  <label>
+                    Buy every
+                    <select value={frequencyInput} onChange={event => setFrequencyInput(event.target.value)}>
+                      {SCHEDULED_DCA_FREQUENCIES.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    Buy for
+                    <div className="simple-input-affix simple-input-affix--end">
+                      <input
+                        type="number"
+                        min="7"
+                        max="90"
+                        step="1"
+                        value={durationInput}
+                        onChange={event => setDurationInput(event.target.value)}
+                        aria-label="DCA duration in days"
+                      />
+                      <span>days</span>
+                    </div>
+                  </label>
+                  <label>
+                    Profit target
+                    <div className="simple-input-affix simple-input-affix--end">
+                      <input
+                        type="number"
+                        min="5"
+                        max="500"
+                        step="5"
+                        value={targetInput}
+                        onChange={event => setTargetInput(event.target.value)}
+                        aria-label="Profit target percentage from simulated average buy"
+                      />
+                      <span>%</span>
+                    </div>
+                  </label>
                 </div>
-                {candleReady && <RiskMeter quality={selectedPlan.quality} />}
-              </div>
 
-              {candleLoading && (
-                <div className="gate-box gate-box--warning">
-                  <strong>Building this interval’s evidence</strong>
-                  <p>The plan appears only after the selected pool’s real OHLCV is ready.</p>
+                <div className="simple-plan-builder__preview" aria-live="polite">
+                  <span>Plan preview</span>
+                  <strong>About {draftEstimate.purchaseCount} buys of {formatUsd(draftEstimate.amountPerBuyUsd)} · {draftEstimate.frequencyLabel.toLowerCase()}</strong>
                 </div>
-              )}
+
+                <button className="simple-plan-builder__submit" type="submit" disabled={candleLoading}>
+                  {candleLoading ? "Reading market volatility…" : canShowPlan ? "Update DCA plan" : "Generate DCA plan"}
+                </button>
+              </form>
+
               {candleState === "error" && (
-                <div className="gate-box gate-box--blocked" aria-label="Candle loading controls">
-                  <strong>Candles could not be loaded</strong>
-                  <p>{candleError}</p>
-                  <button type="button" onClick={retryCandles}>Retry this interval</button>
-                </div>
-              )}
-              {candleReady && selectedPlan.quality.blockers.length > 0 && (
                 <div className="gate-box gate-box--blocked" role="alert">
-                  <strong>Plans need more evidence</strong>
-                  <ul>{selectedPlan.quality.blockers.map(item => <li key={item}>{item}</li>)}</ul>
-                  {timeframeId !== "4h" && (selectedPlan.quality.candleCount < 20 || selectedPlan.quality.historyHours < 24) && (
-                    <button type="button" onClick={() => chooseTimeframe("4h")}>Use 4H evidence</button>
-                  )}
+                  <strong>Market chart could not be loaded</strong>
+                  <p>{candleError}</p>
+                  <button type="button" onClick={retryCandles}>Try again</button>
                 </div>
               )}
-              {candleReady && selectedPlan.quality.warnings.length > 0 && (
-                <details className="plan-warnings">
-                  <summary>{selectedPlan.quality.warnings.length} data and volatility note{selectedPlan.quality.warnings.length === 1 ? "" : "s"}</summary>
-                  <ul>{selectedPlan.quality.warnings.map(item => <li key={item}>{item}</li>)}</ul>
-                </details>
-              )}
-              {candleReady && planSet.valuationWarnings.length > 0 && (
-                <div className="gate-box gate-box--warning" role="status">
-                  <strong>Verify the reported valuation data</strong>
-                  <ul>{planSet.valuationWarnings.map(item => <li key={item}>{item}</li>)}</ul>
+              {candleReady && scheduledPlan && !scheduledPlan.canSimulate && (
+                <div className="gate-box gate-box--blocked" role="alert">
+                  <strong>This pool needs more price history</strong>
+                  <ul>{blockingReasons.map(item => <li key={item}>{item}</li>)}</ul>
                 </div>
               )}
-              {canShowPlan && selectedPlan.targetAlreadyMet && (
-                <div className="gate-box gate-box--warning" role="note">
-                  <strong>Today’s quote is already above S1</strong>
-                  <p>S1 is active only after the planned buys fill. This is not a current sell signal.</p>
-                </div>
-              )}
-
-              <PlanProfileSelector
-                plans={planSet.profiles}
-                selectedId={selectedPlan.profileId}
-                onSelect={setSelectedProfileId}
-                valueMode={valueMode}
-                currentPrice={market.priceUsd}
-                currentMarketCap={market.marketCapUsd}
-                currentFdv={market.fdvUsd}
-              />
             </section>
 
-            <section className="chart-panel chart-panel--studio" aria-labelledby="selected-chart-title">
-              <div className="chart-studio-toolbar">
-                <div>
-                  <span>2 · Read the selected map</span>
-                  <h3 id="selected-chart-title">{selectedPlan.profileName} · {asset.token.symbol?.toUpperCase()} / {valueMode === "price" ? "USD" : valueMode === "marketCap" ? "MCAP" : "FDV"}</h3>
-                  <p><strong>{formatProjectedValue(currentProjection, valueMode)} current</strong> · Hollow rail markers are planned levels, not completed buys or sells.</p>
-                </div>
-                <div className="chart-studio-toolbar__controls">
+            {canShowPlan && (
+              <section className="scheduled-plan-preview" ref={planResultRef} tabIndex={-1} aria-labelledby="scheduled-plan-preview-title">
+                <span>Plan ready</span>
+                <h3 id="scheduled-plan-preview-title">
+                  {formatUsd(planInputs.totalUsd)} over {generatedSchedule.durationDays} days
+                </h3>
+                <p>
+                  <strong>BUY {generatedSchedule.purchaseCount} times</strong> · {formatUsd(generatedSchedule.amountPerBuyUsd)} per buy · {generatedFrequency.label.toLowerCase()}.
+                  The dotted future path is one volatility-based example, not a price prediction.
+                </p>
+              </section>
+            )}
+
+            {canShowPlan && (
+              <section className="simple-chart-panel" aria-labelledby="scheduled-chart-title">
+                <header className="simple-chart-panel__header">
+                  <div>
+                    <span>Simulated DCA chart</span>
+                    <h3 id="scheduled-chart-title">{asset.token.symbol?.toUpperCase()} · your {generatedSchedule.durationDays}-day plan</h3>
+                    <p>BUY shows simulated purchases. TARGET CLOSE and RISK REVIEW are conditional references; no sale or order is modeled.</p>
+                  </div>
                   <div className="value-mode-control" role="group" aria-label="Chart value unit">
                     {VALUE_MODES.map(item => {
-                      const available = item.id === "price" || planSet.valuationScales[item.id]?.available;
+                      const available = item.id === "price"
+                        || (item.id === "marketCap" ? finiteNumber(market.marketCapUsd) : finiteNumber(market.fdvUsd));
                       return (
                         <button
                           key={item.id}
@@ -687,157 +711,104 @@ export default function OnchainAnalyzer() {
                       );
                     })}
                   </div>
-                  <div className="timeframe-control" role="group" aria-label="Chart timeframe">
-                    {TIMEFRAMES.map(item => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className={item.id === timeframeId ? "active" : ""}
-                        aria-pressed={item.id === timeframeId}
-                        aria-label={item.ariaLabel}
-                        onClick={() => chooseTimeframe(item.id)}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-                  <label className="touch-toggle">
-                    <input type="checkbox" checked={showIllustrativeTouches} onChange={event => setShowIllustrativeTouches(event.target.checked)} />
-                    <span>Past level touches</span>
-                  </label>
-                </div>
-              </div>
-
-              <DcaChart
-                candles={candles}
-                plan={candleReady ? selectedPlan : null}
-                symbol={asset.token.symbol}
-                loading={candleLoading}
-                error={candleError}
-                valueMode={valueMode}
-                valuationScales={planSet.valuationScales}
-                illustrativeEvents={illustrativeEvents}
-                showIllustrativeTouches={showIllustrativeTouches}
-              />
-
-              {canShowPlan && (
-                <details className="execution-details">
-                  <summary>Open the full B1–B4 execution stages</summary>
-                  <ExecutionMap
-                    plan={selectedPlan}
-                    tokenSymbol={asset.token.symbol}
-                    reviewDays={reviewDays}
-                    reviewBy={reviewBy}
-                    valueMode={valueMode}
-                  />
-                </details>
-              )}
-            </section>
-
-            {canShowPlan && (
-              <PlanOutcome
-                plan={selectedPlan}
-                budget={capital}
-                durationDays={reviewDays}
-                valueMode={valueMode}
-                market={market}
-                tokenSymbol={asset.token.symbol}
-              />
-            )}
-
-            {canShowPlan && (
-              <section className="volatility-outlook" aria-labelledby="volatility-outlook-title">
-                <header>
-                  <div>
-                    <span>Volatility context</span>
-                    <h3 id="volatility-outlook-title">What this {reviewDays}-day window could expose</h3>
-                  </div>
-                  <span>{selectedPlan.targetSource === "volatility" ? `S1 auto · +${selectedPlan.targetPct}%` : `S1 custom · +${selectedPlan.targetPct}%`}</span>
                 </header>
-                <div className="outlook-range">
-                  <div><span>Lower scenario</span><strong className="negative">{formatProjectedValue(planSet.volatilityOutlook.lower, valueMode)}</strong></div>
-                  <div><span>Current reference</span><strong>{formatProjectedValue(planSet.volatilityOutlook.current, valueMode)}</strong></div>
-                  <div><span>Upper scenario</span><strong className="positive">{formatProjectedValue(planSet.volatilityOutlook.upper, valueMode)}</strong></div>
-                </div>
-                <p>{planSet.volatilityOutlook.caveat} MCAP and FDV use the current reported supply ratio.</p>
+
+                <ScheduledDcaChart
+                  historyCandles={candles}
+                  plan={scheduledPlan}
+                  tokenSymbol={asset.token.symbol}
+                  valueMode={valueMode}
+                  market={market}
+                />
               </section>
             )}
 
-            <section className="analysis-accordions" aria-label="Safety and market details">
-              <details>
-                <summary>Safety limits</summary>
-                <div className="safety-grid">
-                  <article className="safety-card">
-                    <span className="status-icon status-icon--good">✓</span>
-                    <div><strong>Exact pool match</strong><p>The submitted contract is an exact token in the selected pool.</p></div>
-                  </article>
-                  <article className={`safety-card ${market.liquidityUsd < 50_000 ? "safety-card--warn" : ""}`}>
-                    <span className="status-icon">$</span>
-                    <div><strong>Observed liquidity</strong><p>{formatUsd(market.liquidityUsd)} in this pool. This does not guarantee execution price.</p></div>
-                  </article>
-                  <article className="safety-card safety-card--warn">
-                    <span className="status-icon">!</span>
-                    <div><strong>Contract security not scanned</strong><p>Honeypot, tax, mint/freeze authority and holder concentration need a security provider.</p></div>
-                  </article>
-                  <article className="safety-card safety-card--warn">
-                    <span className="status-icon">?</span>
-                    <div><strong>Unverified is not safe or unsafe</strong><p>Market data alone cannot prove that a contract is trustworthy.</p></div>
-                  </article>
-                  <div className="safety-disclaimer">Memecoins can lose 100%, liquidity can disappear, and real orders may execute far from the displayed levels.</div>
-                </div>
-              </details>
-
-              <details>
-                <summary>Market data and methodology</summary>
-                <div className="market-table">
-                  {[
-                    ["Network", selectedNetwork],
-                    ["DEX", dexName],
-                    ["Pool", compactAddress(asset.poolAddress, 10, 8)],
-                    ["Counter token", asset.counterToken?.symbol || "—"],
-                    ["24h trades", hasTrades ? `${buys} buys · ${sells} sells` : "—"],
-                    ["Valid chart candles", candleReady ? selectedPlan.quality.candleCount.toLocaleString() : "—"],
-                    ["History covered", candleReady ? formatHistorySpan(selectedPlan.quality.historyDays) : "—"],
-                    ["Expected candle coverage", candleReady && selectedPlan.quality.coverageRatio !== null ? formatPercent(selectedPlan.quality.coverageRatio * 100) : "—"],
-                    ["Latest candle age", candleReady ? formatAgeHours(selectedPlan.quality.latestCandleAgeHours) : "—"],
-                    ["ATR / live price", candleReady ? formatPercent(selectedPlan.quality.atrPct * 100) : "—"],
-                    ["Monitoring review", reviewBy],
-                    ["Pool resolved", resolvedAt ? new Date(resolvedAt).toLocaleString() : "—"],
-                    ["Candles fetched", candlesAt ? new Date(candlesAt).toLocaleString() : "—"],
-                  ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}
-                  {poolPageUrl && <a href={poolPageUrl} target="_blank" rel="noreferrer">Open selected pool on GeckoTerminal ↗</a>}
-                </div>
-              </details>
-            </section>
+            {canShowPlan && <ScheduledPlanSummary plan={scheduledPlan} valueMode={valueMode} />}
 
             {canShowPlan && (
-              <div id="share-plan-card" className="share-plan-section" tabIndex={-1} role="region" aria-labelledby="onchain-share-title">
+              <div id="share-plan-card" className="share-plan-section share-plan-section--simple" tabIndex={-1} role="region" aria-labelledby="onchain-share-title">
                 <OnchainSharePanel
                   asset={asset}
-                  plan={selectedPlan}
-                  profile={selectedProfile}
-                  reviewDays={reviewDays}
-                  timeframeLabel={timeframe.label}
+                  plan={scheduledPlan}
                   dataAsOf={candlesAt}
                   marketDataAsOf={resolvedAt}
                   candleDataAsOf={candlesAt}
-                  valuationWarnings={planSet.valuationWarnings}
+                  valuationWarnings={valuationWarnings}
+                  warnings={planWarnings}
                   initialValueMode={valueMode}
                 />
               </div>
             )}
 
-            <footer className="onchain-footer">
-              <span>Simulation only · Not financial advice · Planned B1–B4 / conditional S1 / manual X1</span>
+            <details className="simple-technical-details" ref={technicalDetailsRef}>
+              <summary>
+                <span>
+                  <strong>How this was calculated, pool and safety</strong>
+                  <small>Market source, evidence, assumptions and limitations</small>
+                </span>
+              </summary>
+              <div className="simple-technical-details__content">
+                <section aria-labelledby="technical-pool-title">
+                  <h4 id="technical-pool-title">Selected market</h4>
+                  <label htmlFor="pool-source">Exact pool used for this chart</label>
+                  <select id="pool-source" value={selectedPoolKey} onChange={choosePool} disabled={poolOptions.length < 2}>
+                    {poolOptions.map(option => {
+                      const optionDex = typeof option.dex === "string" ? option.dex : option.dex?.name || option.dex?.id || "DEX";
+                      const optionNetwork = NETWORK_NAMES[option.network] || option.network;
+                      return (
+                        <option key={`${option.network}:${option.poolAddress}`} value={`${option.network}:${option.poolAddress}`}>
+                          {optionNetwork} · {optionDex} · {option.counterToken?.symbol || "?"} · {compactAddress(option.poolAddress, 6, 4)} · {formatUsd(option.market?.liquidityUsd, { compact: true })}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <dl>
+                    <div><dt>Network</dt><dd>{selectedNetwork}</dd></div>
+                    <div><dt>DEX / pair</dt><dd>{dexName} / {asset.counterToken?.symbol || "?"}</dd></div>
+                    <div><dt>Liquidity</dt><dd>{formatUsd(market.liquidityUsd)}</dd></div>
+                    <div><dt>24h volume</dt><dd>{formatUsd(market.volume24h)}</dd></div>
+                    <div><dt>24h trades</dt><dd>{hasTrades ? `${market.transactions24h.buys} buys · ${market.transactions24h.sells} sells` : "Unavailable"}</dd></div>
+                  </dl>
+                  {poolPageUrl && <a href={poolPageUrl} target="_blank" rel="noreferrer">Open selected pool on GeckoTerminal ↗</a>}
+                </section>
+
+                <section aria-labelledby="technical-method-title">
+                  <h4 id="technical-method-title">Calculation evidence</h4>
+                  <dl>
+                    <div><dt>Buy frequency</dt><dd>{generatedFrequency?.label || frequencyById(planInputs.frequencyId)?.label}</dd></div>
+                    <div><dt>Evidence candles</dt><dd>{timeframe.label} · {quality.candleCount || candles.length} valid</dd></div>
+                    <div><dt>History covered</dt><dd>{formatHistorySpan(quality.historyDays)}</dd></div>
+                    <div><dt>Latest candle age</dt><dd>{formatAgeHours(quality.latestCandleAgeHours)}</dd></div>
+                    <div><dt>Data-quality score</dt><dd>{finiteNumber(quality.score) ? `${quality.score}/100` : "Unavailable"}</dd></div>
+                    <div><dt>Volatility method</dt><dd>{scheduledPlan?.volatility?.method || "Recent realized pool volatility"}</dd></div>
+                    <div><dt>Pool resolved</dt><dd>{resolvedAt ? new Date(resolvedAt).toLocaleString() : "—"}</dd></div>
+                    <div><dt>Candles fetched</dt><dd>{candlesAt ? new Date(candlesAt).toLocaleString() : "—"}</dd></div>
+                  </dl>
+                  {[...planWarnings, ...valuationWarnings].length > 0 && (
+                    <div className="simple-technical-details__notes">
+                      <strong>Data notes</strong>
+                      <ul>{[...planWarnings, ...valuationWarnings].map(item => <li key={item}>{item}</li>)}</ul>
+                    </div>
+                  )}
+                </section>
+
+                <section aria-labelledby="technical-safety-title">
+                  <h4 id="technical-safety-title">Safety and assumptions</h4>
+                  <ul className="simple-safety-list">
+                    <li>Contract security, taxes, mint/freeze authority and holder concentration are not scanned.</li>
+                    <li>Real buys can differ because of fees, slippage, price impact, failed transactions and changing liquidity.</li>
+                    <li>TARGET CLOSE and RISK REVIEW are simulation references. No sale or order is modeled.</li>
+                    <li>MCAP and FDV views use the current reported valuation-to-price ratio.</li>
+                    {assumptions.map(item => <li key={item}>{plainAssumption(item)}</li>)}
+                  </ul>
+                </section>
+              </div>
+            </details>
+
+            <footer className="onchain-footer onchain-footer--simple">
+              <span>Illustrative simulation · Not financial advice · No orders are placed</span>
               <span>Selected pool: {dexName} · {compactAddress(asset.poolAddress)}</span>
             </footer>
-
-            {canShowPlan && (
-              <div className="plan-sticky-actions" aria-label="Plan actions">
-                <button type="button" onClick={() => scrollTo("share-plan-card")}>Customize card</button>
-                <button type="button" onClick={() => scrollTo("plan-builder")}>Edit plan</button>
-              </div>
-            )}
           </section>
         )}
       </main>

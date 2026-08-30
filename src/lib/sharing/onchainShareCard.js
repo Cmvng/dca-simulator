@@ -2,7 +2,6 @@ import { T } from "../../styles/theme.js";
 import { imageProxyUrl } from "../../services/api.js";
 import {
   compactAddress,
-  formatPercent,
   formatPrice,
   formatUsd,
 } from "../onchain/formatters.js";
@@ -30,21 +29,45 @@ function fillRoundRect(ctx, x, y, width, height, radius, color) {
   ctx.fill();
 }
 
-function fitText(ctx, text, maxWidth, maxSize, weight = 700, minSize = 12) {
+function fitText(ctx, text, maxWidth, maxSize, weight = 700, minSize = 11) {
   let size = maxSize;
   while (size > minSize) {
     ctx.font = font(size, weight);
-    if (ctx.measureText(text).width <= maxWidth) break;
+    if (ctx.measureText(String(text)).width <= maxWidth) break;
     size -= 1;
   }
   return size;
 }
 
 function truncateText(ctx, text, maxWidth) {
-  if (ctx.measureText(text).width <= maxWidth) return text;
+  if (ctx.measureText(String(text)).width <= maxWidth) return String(text);
   let output = String(text);
-  while (output.length > 1 && ctx.measureText(`${output}…`).width > maxWidth) output = output.slice(0, -1);
+  while (output.length > 1 && ctx.measureText(`${output}…`).width > maxWidth) {
+    output = output.slice(0, -1);
+  }
   return `${output}…`;
+}
+
+function wrapLines(ctx, text, maxWidth, maxLines = 2) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = "";
+  words.forEach(word => {
+    const next = current ? `${current} ${word}` : word;
+    if (ctx.measureText(next).width <= maxWidth || !current) {
+      current = next;
+      return;
+    }
+    if (lines.length < maxLines - 1) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = `${current} ${word}`;
+    }
+  });
+  if (current) lines.push(current);
+  if (lines.length) lines[lines.length - 1] = truncateText(ctx, lines.at(-1), maxWidth);
+  return lines.slice(0, maxLines);
 }
 
 function loadImage(src) {
@@ -103,7 +126,7 @@ function drawToken(ctx, image, symbol, x, y, size) {
     ctx.drawImage(image, x, y, size, size);
   } else {
     ctx.fillStyle = T.blue;
-    ctx.font = font(Math.round(size * 0.3), 700);
+    ctx.font = font(Math.round(size * 0.28), 700);
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(symbol.slice(0, 4), x + size / 2, y + size / 2);
@@ -117,9 +140,24 @@ function compactValuation(value) {
   return value ? formatUsd(value, { compact: true }) : "Unavailable";
 }
 
+function selectedValue(model, values) {
+  if (model.mode === "price") return formatPrice(values?.price);
+  return compactValuation(values?.[model.mode]);
+}
+
+function plainPercent(value, digits = 1) {
+  if (!Number.isFinite(Number(value))) return "Unavailable";
+  return `${Math.abs(Number(value)).toFixed(digits).replace(/\.0$/, "")}%`;
+}
+
+function targetLabel(model) {
+  if (!Number.isFinite(model.profitTargetPct)) return "Profit target";
+  return `Profit target (+${Math.abs(model.profitTargetPct).toFixed(0)}%)`;
+}
+
 function formatDataStamp(value) {
   const date = value ? new Date(value) : null;
-  if (!date || !Number.isFinite(date.getTime())) return "";
+  if (!date || !Number.isFinite(date.getTime())) return "Time unavailable";
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
@@ -131,201 +169,150 @@ function formatDataStamp(value) {
   }).format(date).replace("24:", "00:");
 }
 
-function valuationRange(model, leg) {
-  if (model.mode === "price") return `${formatPrice(leg.priceLower)} – ${formatPrice(leg.priceUpper)}`;
-  const lower = leg.valuationLower[model.mode];
-  const upper = leg.valuationUpper[model.mode];
-  if (!lower || !upper) return "Unavailable";
-  return `${compactValuation(lower)} – ${compactValuation(upper)}`;
+function terminalCopy(model) {
+  if (model.terminalType.startsWith("target")
+    || ["profit", "take-profit", "take_profit"].includes(model.terminalType)) {
+    return "The illustrative sample reached the profit target; later buys were paused.";
+  }
+  if (model.terminalType.startsWith("review")
+    || ["risk", "risk-review", "risk_review"].includes(model.terminalType)) {
+    return "The illustrative sample reached the risk-review level; later buys were paused.";
+  }
+  return "If the target is not reached, finish the scheduled buys and review the plan manually.";
 }
 
-function outcomeValuation(model, valuations, price) {
-  if (model.mode === "price") return formatPrice(price);
-  return valuations[model.mode] ? compactValuation(valuations[model.mode]) : "Unavailable";
-}
-
-function drawHeader(ctx, model, tokenImage, layout) {
-  const { x, y, width, scale } = layout;
-  drawToken(ctx, tokenImage, model.token.symbol, x, y, 64 * scale);
+function drawHeader(ctx, model, image, { x, y, width, scale }) {
+  const tokenSize = 66 * scale;
+  drawToken(ctx, image, model.token.symbol, x, y, tokenSize);
 
   ctx.fillStyle = T.ink;
   ctx.font = font(29 * scale, 700);
-  ctx.fillText(model.token.symbol, x + 84 * scale, y + 27 * scale);
+  ctx.fillText(model.token.symbol, x + 86 * scale, y + 28 * scale);
   ctx.fillStyle = T.ink2;
-  const identity = `${model.token.network.toUpperCase()} · CA ${model.token.address}`;
-  const identitySize = fitText(ctx, identity, Math.max(240 * scale, width - 270 * scale), 13 * scale, 600, 8 * scale);
-  ctx.font = font(identitySize, 600);
-  ctx.fillText(identity, x + 84 * scale, y + 53 * scale);
+  const identity = `${model.token.network.toUpperCase()} · CA ${compactAddress(model.token.address, 8, 7)}`;
+  ctx.font = font(13 * scale, 600);
+  ctx.fillText(truncateText(ctx, identity, width - 250 * scale), x + 86 * scale, y + 54 * scale);
 
   ctx.textAlign = "right";
   ctx.fillStyle = T.blue;
   ctx.font = font(22 * scale, 700);
-  ctx.fillText("cmvng", x + width, y + 24 * scale);
+  ctx.fillText("cmvng", x + width, y + 25 * scale);
   ctx.fillStyle = T.ink3;
-  ctx.font = font(12 * scale, 700);
-  ctx.fillText("ONCHAIN DCA MAP", x + width, y + 48 * scale);
+  ctx.font = font(11 * scale, 700);
+  ctx.fillText("DCA PLAN", x + width, y + 49 * scale);
   ctx.textAlign = "left";
 }
 
-function drawPlanSummary(ctx, model, layout) {
-  const { x, y, width, scale } = layout;
-  const pillH = 34 * scale;
-  const gap = 8 * scale;
-  const labels = [
-    "PLANNED · NOT EXECUTED",
-    `${model.profile.label} plan`,
-    `${formatUsd(model.budget)} budget`,
-    `${model.reviewDays}-day review`,
-    `${model.timeframeLabel} evidence`,
-  ];
-  let cursor = x;
-  ctx.font = font(13 * scale, 700);
-  labels.forEach((label, index) => {
-    const pillW = Math.min(width, ctx.measureText(label).width + 24 * scale);
-    if (cursor + pillW > x + width && index > 0) return;
-    fillRoundRect(ctx, cursor, y, pillW, pillH, pillH / 2, index === 0 ? T.blueSoft : T.card2);
-    ctx.fillStyle = index === 0 ? T.blue : T.ink2;
-    ctx.fillText(label, cursor + 12 * scale, y + 22 * scale);
-    cursor += pillW + gap;
-  });
+function drawHero(ctx, model, { x, y, width, scale }) {
+  fillRoundRect(ctx, x, y, width, 154 * scale, 24 * scale, T.card2);
+  fillRoundRect(ctx, x + 18 * scale, y + 16 * scale, 250 * scale, 30 * scale, 15 * scale, T.blueSoft);
+  ctx.fillStyle = T.blue;
+  ctx.font = font(11 * scale, 700);
+  ctx.fillText("ILLUSTRATIVE SIMULATION · NOT A FORECAST", x + 31 * scale, y + 36 * scale);
 
   ctx.fillStyle = T.ink;
-  ctx.font = font(20 * scale, 700);
-  const zoneHeading = model.impliedValuation
-    ? `IMPLIED ${model.modeLabel.toUpperCase()} BUY ZONES · NON-EXECUTABLE`
-    : "POTENTIAL PRICE BUY ZONES · NON-EXECUTABLE";
-  ctx.fillText(zoneHeading, x, y + 70 * scale);
+  ctx.font = font(34 * scale, 700);
+  ctx.fillText(`${formatUsd(model.totalAmountUsd)} over ${model.durationDays} days`, x + 20 * scale, y + 86 * scale);
+
   ctx.fillStyle = T.ink2;
-  ctx.font = font(13 * scale, 500);
-  const quoteStamp = formatDataStamp(model.marketDataAsOf);
-  const context = `Quote snapshot${quoteStamp ? ` ${quoteStamp} UTC` : " · time unavailable"} · Price ${formatPrice(model.currentPrice)} · MCAP ${compactValuation(model.currentMarketCap)} · FDV ${compactValuation(model.currentFdv)}`;
-  ctx.fillText(truncateText(ctx, context, width), x, y + 95 * scale);
+  ctx.font = font(15 * scale, 600);
+  const schedule = `${model.buyFrequencyLabel} · ${model.plannedBuyCount.toLocaleString()} planned buys · ${formatUsd(model.amountPerBuyUsd)} each`;
+  ctx.fillText(truncateText(ctx, schedule, width - 40 * scale), x + 20 * scale, y + 120 * scale);
+
+  ctx.font = font(12 * scale, 600);
+  ctx.fillStyle = T.ink3;
+  ctx.fillText("No trades are placed by this card.", x + 20 * scale, y + 142 * scale);
 }
 
-function drawBuyRows(ctx, model, layout) {
-  const { x, y, width, rowHeight, scale } = layout;
-  model.legs.forEach((leg, index) => {
-    const rowY = y + rowHeight * index;
-    fillRoundRect(ctx, x, rowY, width, rowHeight - 10 * scale, 18 * scale, T.card2);
-    fillRoundRect(ctx, x + 14 * scale, rowY + 15 * scale, 48 * scale, 38 * scale, 19 * scale, T.blue);
-    ctx.fillStyle = "#FFFFFF";
-    ctx.font = font(15 * scale, 700);
-    ctx.textAlign = "center";
-    ctx.fillText(leg.id, x + 38 * scale, rowY + 40 * scale);
-    ctx.textAlign = "left";
-
-    ctx.fillStyle = T.ink;
-    const primary = valuationRange(model, leg);
-    const primarySize = fitText(ctx, primary, width - 226 * scale, 19 * scale, 700, 11 * scale);
-    ctx.font = font(primarySize, 700);
-    ctx.fillText(primary, x + 78 * scale, rowY + 32 * scale);
-    ctx.fillStyle = T.ink2;
-    ctx.font = font(12 * scale, 500);
-    ctx.fillText(`${formatPrice(leg.priceLower)} – ${formatPrice(leg.priceUpper)} · ${formatPercent(leg.drawdownPct, 0)}`, x + 78 * scale, rowY + 54 * scale);
-
-    ctx.textAlign = "right";
-    ctx.fillStyle = T.ink;
-    ctx.font = font(17 * scale, 700);
-    ctx.fillText(`${leg.allocationPct}%`, x + width - 16 * scale, rowY + 31 * scale);
-    ctx.fillStyle = T.ink2;
-    ctx.font = font(12 * scale, 600);
-    ctx.fillText(formatUsd(leg.amountUsd), x + width - 16 * scale, rowY + 53 * scale);
-    ctx.textAlign = "left";
-  });
+function drawVolatility(ctx, model, { x, y, width, scale }) {
+  fillRoundRect(ctx, x, y, width, 82 * scale, 18 * scale, T.blueSoft);
+  ctx.fillStyle = T.blue;
+  ctx.font = font(12 * scale, 700);
+  ctx.fillText("HISTORICAL VOLATILITY", x + 18 * scale, y + 27 * scale);
+  ctx.fillStyle = T.ink;
+  ctx.font = font(21 * scale, 700);
+  ctx.fillText(`${model.volatilityTier} · ${plainPercent(model.dailySwingPct)} typical daily swing`, x + 18 * scale, y + 58 * scale);
 }
 
-function drawOutcomeCards(ctx, model, layout) {
-  const { x, y, width, height, scale, stacked } = layout;
+function drawFactGrid(ctx, model, { x, y, width, scale, columns = 2 }) {
   const gap = 12 * scale;
-  const cardWidth = stacked ? width : (width - gap) / 2;
-  const cardHeight = stacked ? (height - gap) / 2 : height;
-  const outcomes = [
-    {
-      id: "S1",
-      label: "Target reference",
-      value: outcomeValuation(model, model.targetValuation, model.targetPrice),
-      detail: model.targetAlreadyMet
-        ? `Conditional after all B fills · +${model.targetPct}% from avg · no sale modeled`
-        : `All B fills · +${model.targetPct}% from avg · ${formatUsd(model.targetValue)} value · no sale modeled`,
-      color: "#D86B16",
-      background: "#FFF4E8",
-    },
-    {
-      id: "X1",
-      label: "Close below → reassess",
-      value: outcomeValuation(model, model.invalidationValuation, model.invalidationPrice),
-      detail: `${model.timeframeLabel} candle close required · manual only · ${formatPercent(model.downsideFromAveragePct, 0)} from avg · not a stop`,
-      color: T.loss,
-      background: "#FFF0ED",
-    },
+  const facts = [
+    ["Sample buys shown", `${model.executedSampleBuyCount.toLocaleString()} of ${model.plannedBuyCount.toLocaleString()}`],
+    [`Modeled average entry · ${model.modeLabel}`, selectedValue(model, model.averageEntry)],
+    [targetLabel(model), selectedValue(model, model.profitTarget)],
+    ["Risk review · pause and reassess", selectedValue(model, model.riskReview)],
+    ["Unused budget in sample", formatUsd(model.unusedBudgetUsd)],
+    ["Display unit", model.valuationAvailable ? model.modeLabel : `${model.modeLabel} unavailable`],
   ];
+  const cardWidth = (width - gap * (columns - 1)) / columns;
+  const cardHeight = 94 * scale;
 
-  outcomes.forEach((outcome, index) => {
-    const cardX = stacked ? x : x + index * (cardWidth + gap);
-    const cardY = stacked ? y + index * (cardHeight + gap) : y;
-    fillRoundRect(ctx, cardX, cardY, cardWidth, cardHeight, 20 * scale, outcome.background);
-    fillRoundRect(ctx, cardX + 16 * scale, cardY + 16 * scale, 44 * scale, 32 * scale, 16 * scale, outcome.color);
-    ctx.fillStyle = "#FFFFFF";
-    ctx.font = font(13 * scale, 700);
-    ctx.textAlign = "center";
-    ctx.fillText(outcome.id, cardX + 38 * scale, cardY + 37 * scale);
-    ctx.textAlign = "left";
-    ctx.fillStyle = outcome.color;
-    ctx.font = font(13 * scale, 700);
-    ctx.fillText(outcome.label, cardX + 72 * scale, cardY + 36 * scale);
-    ctx.fillStyle = T.ink;
-    const size = fitText(ctx, outcome.value, cardWidth - 32 * scale, 28 * scale, 700, 14 * scale);
-    ctx.font = font(size, 700);
-    ctx.fillText(outcome.value, cardX + 16 * scale, cardY + 79 * scale);
+  facts.forEach(([label, value], index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const cardX = x + column * (cardWidth + gap);
+    const cardY = y + row * (cardHeight + gap);
+    fillRoundRect(ctx, cardX, cardY, cardWidth, cardHeight, 18 * scale, T.card2);
     ctx.fillStyle = T.ink2;
-    ctx.font = font(11 * scale, 600);
-    ctx.fillText(truncateText(ctx, outcome.detail, cardWidth - 32 * scale), cardX + 16 * scale, cardY + 103 * scale);
+    ctx.font = font(11 * scale, 700);
+    ctx.fillText(truncateText(ctx, label, cardWidth - 28 * scale), cardX + 14 * scale, cardY + 25 * scale);
+    ctx.fillStyle = label.startsWith("Profit") ? T.gain : label.startsWith("Risk") ? T.loss : T.ink;
+    const size = fitText(ctx, value, cardWidth - 28 * scale, 22 * scale, 700, 12 * scale);
+    ctx.font = font(size, 700);
+    ctx.fillText(truncateText(ctx, value, cardWidth - 28 * scale), cardX + 14 * scale, cardY + 61 * scale);
   });
+
+  return Math.ceil(facts.length / columns) * cardHeight + (Math.ceil(facts.length / columns) - 1) * gap;
 }
 
-function drawFooter(ctx, model, layout) {
-  const { x, y, width, scale } = layout;
+function drawPlanEnding(ctx, model, { x, y, width, scale }) {
+  fillRoundRect(ctx, x, y, width, 74 * scale, 18 * scale, "#EEF7F2");
+  ctx.fillStyle = T.ink;
+  ctx.font = font(12 * scale, 700);
+  ctx.fillText("WHAT HAPPENS NEXT", x + 16 * scale, y + 23 * scale);
+  ctx.fillStyle = T.ink2;
+  ctx.font = font(12 * scale, 600);
+  const lines = wrapLines(ctx, terminalCopy(model), width - 32 * scale, 2);
+  lines.forEach((line, index) => ctx.fillText(line, x + 16 * scale, y + (45 + index * 17) * scale));
+}
+
+function drawFooter(ctx, model, { x, y, width, scale, expanded = false }) {
   ctx.strokeStyle = T.line;
   ctx.lineWidth = Math.max(1, scale);
   ctx.beginPath();
   ctx.moveTo(x, y);
   ctx.lineTo(x + width, y);
   ctx.stroke();
-  ctx.fillStyle = T.ink3;
-  ctx.font = font(10 * scale, 600);
-  const disclaimer = "Simulation · S1 target / X1 close-confirmed manual reassess · all B fills · values before costs";
-  ctx.fillText(truncateText(ctx, disclaimer, width * 0.64), x, y + 22 * scale);
-  ctx.textAlign = "right";
-  ctx.fillStyle = T.blue;
-  ctx.font = font(10 * scale, 700);
-  const candleStamp = formatDataStamp(model.candleDataAsOf);
-  ctx.fillText(`Quality ${model.qualityScore}/100${candleStamp ? ` · candles ${candleStamp} UTC` : " · candle time unavailable"}`, x + width, y + 22 * scale);
-  ctx.textAlign = "left";
-  ctx.fillStyle = T.ink3;
-  ctx.font = font(9 * scale, 600);
-  const quoteStamp = formatDataStamp(model.marketDataAsOf);
-  const poolSource = `${model.source.provider} quote${quoteStamp ? ` ${quoteStamp} UTC` : " time unavailable"} · ${model.source.dex} / ${model.source.counterSymbol} · pool ${compactAddress(model.source.poolAddress, 7, 6)}`;
-  ctx.fillText(truncateText(ctx, poolSource, width), x, y + 39 * scale);
-  const contractLine = `TOKEN CA · ${model.token.address}`;
-  const contractSize = fitText(ctx, contractLine, width, 9 * scale, 700, 7 * scale);
-  ctx.fillStyle = T.ink2;
-  ctx.font = font(contractSize, 700);
-  ctx.fillText(contractLine, x, y + 55 * scale);
-  const assumption = model.valuationWarnings.length
-    ? `VALUATION WARNING · ${model.valuationWarnings.join(" · ")}`
-    : model.impliedValuation
-      ? "IMPLIED VALUATION · constant current supply ratio · conditional and non-executable"
-      : "CONDITIONAL REFERENCES · non-executable · verify contract and pool independently";
-  ctx.fillStyle = model.valuationWarnings.length ? "#7A3100" : T.ink3;
-  ctx.font = font(8.5 * scale, 700);
-  ctx.fillText(truncateText(ctx, assumption, width), x, y + 71 * scale);
-  ctx.textAlign = "left";
+
+  const quoteStamp = formatDataStamp(model.timestamps.marketDataAsOf);
+  const candleStamp = formatDataStamp(model.timestamps.candleDataAsOf);
+  const source = `${model.source.provider} · ${model.source.dex} / ${model.source.counterSymbol} · pool ${compactAddress(model.source.poolAddress, 7, 6)}`;
+  const rows = [
+    `Market snapshot · ${quoteStamp} UTC`,
+    `Historical sample through · ${candleStamp} UTC`,
+    source,
+    `TOKEN CA · ${model.token.address}`,
+    "Simulation only · not a forecast, financial advice or an exchange order",
+    model.impliedValuation
+      ? "MCAP / FDV levels assume the current reported supply ratio"
+      : "Price levels are illustrative and are not executable orders",
+  ];
+  if (expanded) {
+    rows.push(`Illustrative plan window · ${formatDataStamp(model.timestamps.planStartsAt)} to ${formatDataStamp(model.timestamps.planEndsAt)} UTC`);
+  }
+  if (model.warnings.length) rows.push(`DATA NOTE · ${model.warnings.join(" · ")}`);
+
+  rows.forEach((row, index) => {
+    ctx.fillStyle = index === 3 ? T.ink2 : T.ink3;
+    ctx.font = font((index === 3 ? 9.5 : 9) * scale, index === 3 ? 700 : 600);
+    ctx.fillText(truncateText(ctx, row, width), x, y + (20 + index * 14) * scale);
+  });
 }
 
 export async function makeOnchainShareCard(input) {
   const model = buildOnchainShareModel(input);
-  if (!model) throw new Error("A completed onchain DCA plan is required to generate a card.");
-  const format = ONCHAIN_CARD_FORMATS.find(item => item.id === input.format) || ONCHAIN_CARD_FORMATS[1];
+  if (!model) throw new Error("A complete scheduled DCA plan is required to generate a card.");
+  const format = ONCHAIN_CARD_FORMATS.find(item => item.id === input.format) || ONCHAIN_CARD_FORMATS[0];
   const canvas = document.createElement("canvas");
   canvas.width = format.width;
   canvas.height = format.height;
@@ -335,40 +322,39 @@ export async function makeOnchainShareCard(input) {
 
   ctx.fillStyle = T.bg;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  const margin = format.id === "x" ? 28 : 36;
+  const margin = 36;
   fillRoundRect(ctx, margin, margin, canvas.width - margin * 2, canvas.height - margin * 2, 34, T.card);
 
-  if (format.id === "x") {
-    const x = 70;
-    const width = canvas.width - 140;
-    drawHeader(ctx, model, tokenImage, { x, y: 64, width, scale: 0.84 });
-    drawPlanSummary(ctx, model, { x, y: 133, width, scale: 0.84 });
-    drawBuyRows(ctx, model, { x, y: 235, width: 635, rowHeight: 76, scale: 0.84 });
-    drawOutcomeCards(ctx, model, { x: 730, y: 235, width: 400, height: 294, scale: 0.84, stacked: true });
-    drawFooter(ctx, model, { x, y: 575, width, scale: 0.84 });
-  } else if (format.id === "story") {
-    const x = 82;
-    const width = canvas.width - 164;
-    drawHeader(ctx, model, tokenImage, { x, y: 88, width, scale: 1.22 });
-    drawPlanSummary(ctx, model, { x, y: 212, width, scale: 1.22 });
-    drawBuyRows(ctx, model, { x, y: 370, width, rowHeight: 145, scale: 1.22 });
-    drawOutcomeCards(ctx, model, { x, y: 990, width, height: 390, scale: 1.22, stacked: true });
-    ctx.fillStyle = T.ink;
-    ctx.font = font(25, 700);
-    ctx.fillText("How to read these scenarios", x, 1450);
-    ctx.fillStyle = T.ink2;
-    ctx.font = font(18, 500);
-    ctx.fillText("Each B band is a conditional reference and may never be reached.", x, 1490);
-    ctx.fillText("S1 is a target reference after fills; X1 needs a timeframe close below.", x, 1524);
-    drawFooter(ctx, model, { x, y: 1772, width, scale: 1.22 });
-  } else {
+  if (format.id === "story") {
     const x = 76;
     const width = canvas.width - 152;
-    drawHeader(ctx, model, tokenImage, { x, y: 72, width, scale: 1 });
-    drawPlanSummary(ctx, model, { x, y: 158, width, scale: 1 });
-    drawBuyRows(ctx, model, { x, y: 278, width, rowHeight: 92, scale: 1 });
-    drawOutcomeCards(ctx, model, { x, y: 668, width, height: 135, scale: 1, stacked: false });
-    drawFooter(ctx, model, { x, y: 952, width, scale: 1 });
+    const scale = 1.16;
+    drawHeader(ctx, model, tokenImage, { x, y: 82, width, scale });
+    drawHero(ctx, model, { x, y: 196, width, scale });
+    drawVolatility(ctx, model, { x, y: 398, width, scale });
+    const factsHeight = drawFactGrid(ctx, model, { x, y: 520, width, scale, columns: 1 });
+    drawPlanEnding(ctx, model, { x, y: 520 + factsHeight + 28, width, scale });
+
+    ctx.fillStyle = T.ink;
+    ctx.font = font(20, 700);
+    ctx.fillText("How to read this card", x, 1396);
+    ctx.fillStyle = T.ink2;
+    ctx.font = font(15, 500);
+    [
+      "Scheduled buys are plotted against an illustrative volatility sample.",
+      "The profit target and risk review move with the modeled average entry.",
+      "A risk review pauses the sample; it is not an automatic sale or stop order.",
+    ].forEach((line, index) => ctx.fillText(line, x, 1432 + index * 28));
+    drawFooter(ctx, model, { x, y: 1655, width, scale: 1.12, expanded: true });
+  } else {
+    const x = 72;
+    const width = canvas.width - 144;
+    drawHeader(ctx, model, tokenImage, { x, y: 68, width, scale: 1 });
+    drawHero(ctx, model, { x, y: 154, width, scale: 1 });
+    drawVolatility(ctx, model, { x, y: 326, width, scale: 1 });
+    const factsHeight = drawFactGrid(ctx, model, { x, y: 426, width, scale: 1, columns: 2 });
+    drawPlanEnding(ctx, model, { x, y: 426 + factsHeight + 16, width, scale: 1 });
+    drawFooter(ctx, model, { x, y: 925, width, scale: 1, expanded: false });
   }
 
   return canvas.toDataURL("image/png");

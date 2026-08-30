@@ -1,76 +1,234 @@
 export const ONCHAIN_CARD_FORMATS = [
-  { id: "x", label: "X post", width: 1200, height: 675 },
   { id: "square", label: "Square", width: 1080, height: 1080 },
   { id: "story", label: "Story", width: 1080, height: 1920 },
 ];
 
 export const ONCHAIN_VALUE_MODES = [
   { id: "price", label: "Price" },
-  { id: "marketCap", label: "Market cap" },
+  { id: "marketCap", label: "MCAP" },
   { id: "fdv", label: "FDV" },
 ];
 
-const finitePositive = value => Number.isFinite(Number(value)) && Number(value) > 0;
+const FREQUENCY_LABELS = Object.freeze({
+  "1h": "Every hour",
+  hourly: "Every hour",
+  "6h": "Every 6 hours",
+  "12h": "Every 12 hours",
+  "1d": "Every day",
+  daily: "Every day",
+  "1w": "Every week",
+  weekly: "Every week",
+});
+
+const finite = value => value !== null
+  && value !== undefined
+  && value !== ""
+  && Number.isFinite(Number(value));
+const positive = value => finite(value) && Number(value) > 0;
+
+function firstFinite(...values) {
+  const found = values.find(finite);
+  return found === undefined ? null : Number(found);
+}
+
+function firstPositive(...values) {
+  const found = values.find(positive);
+  return found === undefined ? null : Number(found);
+}
+
+function firstText(...values) {
+  const found = values.find(value => typeof value === "string" && value.trim());
+  return found ? found.trim() : "";
+}
+
+function listFrom(value) {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.items)) return value.items;
+  if (Array.isArray(value?.buys)) return value.buys;
+  if (Array.isArray(value?.scheduledBuys)) return value.scheduledBuys;
+  if (Array.isArray(value?.schedule)) return value.schedule;
+  return [];
+}
+
+function frequencyLabel(id, explicitLabel) {
+  if (firstText(explicitLabel)) return firstText(explicitLabel);
+  const normalized = firstText(id).toLowerCase();
+  return FREQUENCY_LABELS[normalized] || (normalized ? `Every ${normalized}` : "Scheduled buys");
+}
 
 function valuationAtPrice(price, currentPrice, currentValuation) {
-  if (!finitePositive(price) || !finitePositive(currentPrice) || !finitePositive(currentValuation)) return null;
+  if (!positive(price) || !positive(currentPrice) || !positive(currentValuation)) return null;
   return Number(currentValuation) * (Number(price) / Number(currentPrice));
 }
 
-function normalizeProfile(profile) {
-  if (typeof profile === "string") return { id: profile.toLowerCase(), label: profile };
+function valuationSet(price, currentPrice, marketCap, fdv) {
   return {
-    id: profile?.id || "balanced",
-    label: profile?.label || profile?.name || "Balanced",
-    description: profile?.description || "Balanced entries across four volatility zones",
+    price: positive(price) ? Number(price) : null,
+    marketCap: valuationAtPrice(price, currentPrice, marketCap),
+    fdv: valuationAtPrice(price, currentPrice, fdv),
   };
+}
+
+function valuationSetFromPoint(point, price, currentPrice, marketCap, fdv) {
+  const projected = valuationSet(price, currentPrice, marketCap, fdv);
+  if (!point || typeof point !== "object") return projected;
+  return {
+    price: projected.price,
+    marketCap: firstPositive(point.valuation?.marketCapUsd, projected.marketCap),
+    fdv: firstPositive(point.valuation?.fdvUsd, projected.fdv),
+  };
+}
+
+function pointPrice(point) {
+  if (finite(point)) return Number(point);
+  return firstPositive(
+    point?.price,
+    point?.priceUsd,
+    point?.targetPrice,
+    point?.reviewPrice,
+    point?.level,
+    point?.value,
+  );
+}
+
+function normalizeWarnings(...sources) {
+  return sources
+    .flatMap(source => Array.isArray(source) ? source : [])
+    .filter(item => typeof item === "string" && item.trim())
+    .map(item => item.trim())
+    .filter((item, index, items) => items.indexOf(item) === index);
+}
+
+function isBlocked(plan) {
+  return plan?.quality?.canPlan === false
+    || plan?.canPlan === false
+    || plan?.canSimulate === false
+    || plan?.blocked === true
+    || (Array.isArray(plan?.blockers) && plan.blockers.length > 0)
+    || (Array.isArray(plan?.blockingReasons) && plan.blockingReasons.length > 0);
 }
 
 export function buildOnchainShareModel({
   asset,
   plan,
-  profile,
-  reviewDays = 30,
-  timeframeLabel = "4H",
   valueMode = "marketCap",
   dataAsOf,
   marketDataAsOf,
   candleDataAsOf,
   valuationWarnings = [],
+  warnings = [],
 }) {
-  if (!asset?.token || !plan?.quality?.canPlan || !plan?.legs?.length) return null;
+  if (!asset?.token || !plan || isBlocked(plan)) return null;
 
-  const market = asset.market || {};
-  const currentPrice = finitePositive(market.priceUsd)
-    ? Number(market.priceUsd)
-    : Number(plan.quality.currentPrice);
-  const marketCap = finitePositive(market.marketCapUsd) ? Number(market.marketCapUsd) : null;
-  const fdv = finitePositive(market.fdvUsd) ? Number(market.fdvUsd) : null;
+  const market = asset.market || plan.market || {};
+  const currentPrice = firstPositive(
+    market.priceUsd,
+    plan.currentPrice,
+    plan.quality?.currentPrice,
+    plan.market?.priceUsd,
+  );
+  if (!currentPrice) return null;
+
+  const marketCap = firstPositive(market.marketCapUsd, plan.market?.marketCapUsd);
+  const fdv = firstPositive(market.fdvUsd, plan.market?.fdvUsd);
   const requestedMode = valueMode === "fdv" || valueMode === "marketCap" ? valueMode : "price";
-  const mode = requestedMode;
-  const primaryValuation = mode === "marketCap" ? marketCap : mode === "fdv" ? fdv : currentPrice;
 
-  const convert = price => ({
-    marketCap: valuationAtPrice(price, currentPrice, marketCap),
-    fdv: valuationAtPrice(price, currentPrice, fdv),
-  });
+  const scheduledBuys = listFrom(plan.schedule);
+  const executedBuys = listFrom(plan.executedBuys || plan.scenario?.executedBuys || plan.execution?.buys);
+  const totalAmountUsd = firstPositive(
+    plan.totalUsd,
+    plan.totalAmountUsd,
+    plan.budget,
+    plan.schedule?.totalUsd,
+    plan.schedule?.totalAmountUsd,
+    plan.inputs?.totalUsd,
+  );
+  const plannedBuyCount = Math.max(0, Math.round(firstFinite(
+    plan.schedule?.count,
+    plan.schedule?.buyCount,
+    plan.schedule?.purchaseCount,
+    plan.plannedBuyCount,
+    scheduledBuys.length,
+  ) || 0));
+  const amountPerBuyUsd = firstPositive(
+    plan.schedule?.amountPerBuyUsd,
+    plan.schedule?.perBuyUsd,
+    plan.amountPerBuyUsd,
+    scheduledBuys[0]?.amountUsd,
+    totalAmountUsd && plannedBuyCount ? totalAmountUsd / plannedBuyCount : null,
+  );
+  const durationDays = Math.max(1, Math.round(firstFinite(
+    plan.durationDays,
+    plan.schedule?.durationDays,
+    plan.inputs?.durationDays,
+  ) || 1));
+  const frequencyId = firstText(
+    plan.frequencyId,
+    plan.schedule?.frequencyId,
+    plan.schedule?.frequency?.id,
+    plan.frequency?.id,
+    plan.inputs?.frequencyId,
+  ).toLowerCase();
+  const buyFrequencyLabel = frequencyLabel(
+    frequencyId,
+    firstText(plan.frequencyLabel, plan.schedule?.frequencyLabel, plan.schedule?.frequency?.label, plan.frequency?.label),
+  );
 
-  const legs = plan.legs.map(leg => ({
-    id: leg.id,
-    allocationPct: Number(leg.allocationPct),
-    amountUsd: Number(leg.amountUsd),
-    priceLower: Number(leg.lower),
-    priceUpper: Number(leg.upper),
-    drawdownPct: Number(leg.drawdownPct),
-    valuationLower: convert(leg.lower),
-    valuationUpper: convert(leg.upper),
-  }));
+  if (!totalAmountUsd || !plannedBuyCount || !amountPerBuyUsd) return null;
 
-  const targetValuation = convert(plan.targetPrice);
-  const invalidationValuation = convert(plan.invalidationPrice);
-  const downsideFromAveragePct = finitePositive(plan.weightedAverageEntry)
-    ? ((Number(plan.invalidationPrice) / Number(plan.weightedAverageEntry)) - 1) * 100
-    : null;
+  const averageEntryPrice = firstPositive(
+    plan.averageEntry,
+    plan.averageEntryUsd,
+    plan.modeledAverageEntry,
+    plan.weightedAverageEntry,
+    plan.scenario?.averageEntry,
+    plan.scenario?.weightedAverageEntry,
+    executedBuys.at(-1)?.averageEntry,
+    executedBuys.at(-1)?.weightedAverageEntry,
+  );
+  const targetPoint = plan.target || plan.profitTarget || {};
+  const reviewPoint = plan.review || plan.riskReview || plan.downsideReview || {};
+  const profitTargetPct = firstFinite(
+    plan.targetPct,
+    targetPoint.pct,
+    targetPoint.targetPct,
+    plan.inputs?.targetPct,
+  );
+  const profitTargetPrice = pointPrice(targetPoint) || firstPositive(plan.targetPrice);
+  const riskReviewPrice = pointPrice(reviewPoint) || firstPositive(plan.reviewPrice, plan.invalidationPrice);
+  const volatility = plan.volatility || {};
+  const dailySwingPct = firstFinite(
+    volatility.dailySwingPct,
+    volatility.typicalDailySwingPct,
+    volatility.expectedDailySwingPct,
+    volatility.dailyPct,
+    volatility.annualizedPct,
+    plan.dailySwingPct,
+  );
+  const volatilityTier = firstText(
+    volatility.tier,
+    volatility.label,
+    volatility.band,
+    volatility.category,
+    plan.volatilityTier,
+  ) || "Measured";
+  const volatilityScore = firstFinite(volatility.score, plan.volatilityScore);
+  const unusedBudgetUsd = Math.max(0, firstFinite(
+    plan.unusedBudgetUsd,
+    plan.scenario?.unusedBudgetUsd,
+    totalAmountUsd - executedBuys.reduce((sum, buy) => sum + (firstFinite(buy?.amountUsd) || 0), 0),
+  ) || 0);
+  const terminalType = firstText(
+    plan.terminalEvent?.kind,
+    plan.terminalEvent?.type,
+    plan.scenario?.terminalEvent?.type,
+    plan.status,
+  ).toLowerCase();
+
+  const quoteAsOf = marketDataAsOf || asset.resolvedAt || plan.marketDataAsOf || null;
+  const candlesAsOf = candleDataAsOf || dataAsOf || plan.dataAsOf || volatility.sampleEnd || plan.generatedAt || null;
+  const generatedAt = plan.generatedAt || dataAsOf || candlesAsOf || null;
+  const allWarnings = normalizeWarnings(valuationWarnings, warnings, plan.warnings);
 
   return {
     token: {
@@ -80,45 +238,45 @@ export function buildOnchainShareModel({
       image: asset.token.image || null,
       network: asset.network || "onchain",
     },
-    profile: normalizeProfile(profile),
     source: {
-      poolAddress: asset.poolAddress || "",
+      poolAddress: asset.poolAddress || plan.source?.poolAddress || "",
       dex: typeof asset.dex === "string"
         ? asset.dex
-        : asset.dex?.name || asset.dex?.id || "Unknown DEX",
-      counterSymbol: asset.counterToken?.symbol || "?",
-      provider: "GeckoTerminal",
+        : asset.dex?.name || asset.dex?.id || plan.source?.dex || "Unknown DEX",
+      counterSymbol: asset.counterToken?.symbol || plan.source?.counterSymbol || "?",
+      provider: plan.source?.provider || "GeckoTerminal",
     },
-    timeframeLabel,
-    marketDataAsOf: marketDataAsOf || asset.resolvedAt || null,
-    candleDataAsOf: candleDataAsOf || dataAsOf || plan.generatedAt || null,
-    dataAsOf: candleDataAsOf || dataAsOf || plan.generatedAt || null,
-    reviewDays: Math.max(1, Math.round(Number(reviewDays) || 30)),
-    mode,
-    modeLabel: mode === "marketCap" ? "Market cap" : mode === "fdv" ? "FDV" : "Price",
-    impliedValuation: mode !== "price",
-    valuationWarnings: Array.isArray(valuationWarnings)
-      ? valuationWarnings.filter(item => typeof item === "string" && item.trim()).map(item => item.trim())
-      : [],
-    currentPrice,
-    currentMarketCap: marketCap,
-    currentFdv: fdv,
-    currentPrimaryValuation: primaryValuation,
-    budget: Number(plan.budget),
-    targetPct: Number(plan.targetPct),
-    targetPrice: Number(plan.targetPrice),
-    targetValue: Number(plan.targetValue),
-    targetValuation,
-    targetAlreadyMet: Boolean(plan.targetAlreadyMet),
-    invalidationPrice: Number(plan.invalidationPrice),
-    invalidationValue: Number(plan.invalidationValue),
-    invalidationValuation,
-    reassessmentCondition: plan.reassessment?.condition || "selected-interval-close-below",
-    reassessmentAutomaticOrder: Boolean(plan.reassessment?.automaticOrder),
-    downsideFromAveragePct,
-    averageEntry: Number(plan.weightedAverageEntry),
-    qualityScore: Number(plan.quality.score),
-    planMode: plan.mode,
-    legs,
+    timestamps: {
+      marketDataAsOf: quoteAsOf,
+      candleDataAsOf: candlesAsOf,
+      generatedAt,
+      planStartsAt: plan.schedule?.startsAt || null,
+      planEndsAt: plan.schedule?.endsAt || null,
+    },
+    mode: requestedMode,
+    modeLabel: requestedMode === "marketCap" ? "MCAP" : requestedMode === "fdv" ? "FDV" : "Price",
+    impliedValuation: requestedMode !== "price",
+    valuationAvailable: requestedMode === "price"
+      || (requestedMode === "marketCap" ? Boolean(marketCap) : Boolean(fdv)),
+    warnings: allWarnings,
+    current: valuationSet(currentPrice, currentPrice, marketCap, fdv),
+    totalAmountUsd,
+    durationDays,
+    frequencyId,
+    buyFrequencyLabel,
+    plannedBuyCount,
+    amountPerBuyUsd,
+    executedSampleBuyCount: executedBuys.length,
+    averageEntry: valuationSet(averageEntryPrice, currentPrice, marketCap, fdv),
+    profitTargetPct,
+    profitTarget: valuationSetFromPoint(targetPoint, profitTargetPrice, currentPrice, marketCap, fdv),
+    riskReview: valuationSetFromPoint(reviewPoint, riskReviewPrice, currentPrice, marketCap, fdv),
+    volatilityTier,
+    dailySwingPct,
+    volatilityScore,
+    unusedBudgetUsd,
+    terminalType,
+    simulationOnly: true,
+    notForecast: true,
   };
 }
