@@ -140,3 +140,8 @@
   real OHLCV, pool selection, a TradingView-style chart, deterministic buy-zone/reference logic,
   durable route/engine tests, and product documentation. The established v3 simulation engine was
   intentionally left unchanged.
+- PR #1 passed CI, Vercel preview, code review, and security review, then was squash-merged into
+  `feat/cmvng-v2-upgrade` at `3e67f2f` after explicit owner approval. Railway auto-deployed it to
+  `web-production-84b5c.up.railway.app`. Live browser verification confirmed the original planner
+  at `/` and a populated `/contract` PEPE analysis with the exact Uniswap V2 pool, 500 real 4-hour
+  candles, four buy zones, weighted entry, goal, and invalidation.

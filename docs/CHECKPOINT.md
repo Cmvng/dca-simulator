@@ -3,13 +3,14 @@
 > Current working state. Update this file at the end of each implementation session.
 
 **Date:** 2026-08-30
-**Branch:** `codex/memecoin-dca-chart`, based on `feat/cmvng-v2-upgrade`
+**Branch:** `feat/cmvng-v2-upgrade` (Railway-tracked)
+**Feature merge:** `3e67f2f` from [PR #1](https://github.com/Cmvng/dca-simulator/pull/1)
 **Core model:** CMVNG Simulation v3.0.0, unchanged
 **New methodology:** Onchain ladder v1, isolated from the behavior-locked core model
 
 ## Outcome
 
-The contract-address milestone is implemented and published for review in [PR #1](https://github.com/Cmvng/dca-simulator/pull/1). The established planner remains the default at `/`; public `/plan/<id>` pages and `#p=` shares are preserved. The new analyzer is lazy-loaded only at `/contract`.
+The contract-address milestone is merged and live on the Railway production service. The established planner remains the default at `/`; public `/plan/<id>` pages and `#p=` shares are preserved. The new analyzer is lazy-loaded only at `/contract`.
 
 ## Delivered
 
@@ -43,12 +44,16 @@ The contract-address milestone is implemented and published for review in [PR #1
 - [x] Standalone cache-method regression: a live WIF GET returned 200, then the identical URL returned OPTIONS 204 and POST 405 rather than replaying cached GET data
 - [x] Live Ethereum PEPE: exact Uniswap V2 pool, eight alternatives, and 120 chronological 4-hour candles
 - [x] `git diff --check`, conflict-marker scan, and browser-script syntax checks
-- [x] Review branch published and PR #1 opened into `feat/cmvng-v2-upgrade`; not merged or deployed
+- [x] GitHub Actions, Vercel preview, code review, and security review passed
+- [x] PR #1 squash-merged into `feat/cmvng-v2-upgrade` at `3e67f2f`; Railway auto-deployed the new bundle
+- [x] Live Railway `/contract`: Ethereum PEPE resolved to the exact Uniswap V2 pool, loaded 500 chronological 4-hour candles, and rendered four DCA legs, weighted entry, goal, and invalidation
+- [x] Live Railway `/`: established planner still renders and exposes the Contract navigation link
 
 ## Verification blocked by this workspace
 
 - [ ] `npm run smoke`, `npm run smoke:onchain`, and `npm run e2e:plans` could not launch because the configured Chromium executable is absent from this runtime. The harnesses now accept `CHROME_PATH`; no browser assertion ran here.
-- [ ] Review screenshots at desktop, 390px, and 320px once Chromium is available.
+- [x] Live desktop screenshots captured for the empty analyzer and populated PEPE chart.
+- [ ] Review the dedicated harness screenshots at 390px and 320px once Chromium is available.
 
 ## Known launch gaps
 
@@ -61,6 +66,6 @@ The contract-address milestone is implemented and published for review in [PR #1
 
 ## Next handoff
 
-1. Run all three browser harnesses with a valid `CHROME_PATH` and inspect their screenshots.
-2. Review [PR #1](https://github.com/Cmvng/dca-simulator/pull/1) and its CI before any merge or Railway deployment.
-3. Treat the P0 items in `docs/RECOMMENDATIONS.md` as launch requirements, not optional polish.
+1. Run all three browser harnesses with a valid `CHROME_PATH` and inspect the 390px/320px screenshots.
+2. Treat the P0 items in `docs/RECOMMENDATIONS.md` as launch requirements, not optional polish.
+3. Add security and executable-quote providers before presenting the ladder as trade-ready.
