@@ -9,7 +9,7 @@
 
 ## Outcome
 
-The contract-address milestone is implemented locally and ready for review. The established planner remains the default at `/`; public `/plan/<id>` pages and `#p=` shares are preserved. The new analyzer is lazy-loaded only at `/contract`.
+The contract-address milestone is implemented and published for review in [PR #1](https://github.com/Cmvng/dca-simulator/pull/1). The established planner remains the default at `/`; public `/plan/<id>` pages and `#p=` shares are preserved. The new analyzer is lazy-loaded only at `/contract`.
 
 ## Delivered
 
@@ -43,6 +43,7 @@ The contract-address milestone is implemented locally and ready for review. The 
 - [x] Standalone cache-method regression: a live WIF GET returned 200, then the identical URL returned OPTIONS 204 and POST 405 rather than replaying cached GET data
 - [x] Live Ethereum PEPE: exact Uniswap V2 pool, eight alternatives, and 120 chronological 4-hour candles
 - [x] `git diff --check`, conflict-marker scan, and browser-script syntax checks
+- [x] Review branch published and PR #1 opened into `feat/cmvng-v2-upgrade`; not merged or deployed
 
 ## Verification blocked by this workspace
 
@@ -61,6 +62,5 @@ The contract-address milestone is implemented locally and ready for review. The 
 ## Next handoff
 
 1. Run all three browser harnesses with a valid `CHROME_PATH` and inspect their screenshots.
-2. Push `codex/memecoin-dca-chart` and open a PR into `feat/cmvng-v2-upgrade`.
-3. Review the PR and CI before any merge or Railway deployment.
-4. Treat the P0 items in `docs/RECOMMENDATIONS.md` as launch requirements, not optional polish.
+2. Review [PR #1](https://github.com/Cmvng/dca-simulator/pull/1) and its CI before any merge or Railway deployment.
+3. Treat the P0 items in `docs/RECOMMENDATIONS.md` as launch requirements, not optional polish.
