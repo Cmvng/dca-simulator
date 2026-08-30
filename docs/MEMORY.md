@@ -162,3 +162,9 @@
   invalidation, and a review window without predicting future candles. Mobile order is chart-first
   and the full six-metric context remains visible. Follow-up hardening added non-overlapping bands,
   exact-cent allocation, density/freshness gates, stale-response IDs, and refreshable URL context.
+- PR #2 passed CI and independent test/React reviews, then was squash-merged into
+  `feat/cmvng-v2-upgrade` at `ba5b621`. Railway production deployment
+  `166f7b38-2830-4aee-8f7b-e4575379e1a4` reached `SUCCESS`. Live STONK verification used the exact
+  Meteora pool and 26 daily candles: the chart displayed `B1`–`B4`, `S1`, and `X1`; the execution
+  map showed all allocations and the review date; address/pool/interval survived reload; decimal
+  budget input remained exact; and no app-origin console errors were present.
