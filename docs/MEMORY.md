@@ -193,4 +193,10 @@
   share-card formats with market-source provenance, and complete query-state restoration. The main
   simulator chart also gained honest modeled purchase/target/low annotations. Mobile order now
   follows inputs and profiles into the selected chart, outcomes, risk context, and sharing. Local
-  lint, 82 tests, build, and diff checks pass; merge, deployment, and live verification are pending.
+  lint, 82 tests, build, and diff checks passed before publication.
+- **2026-08-30 (Contract Plan Studio v2 release)** — PR #4 was merged into the Railway-tracked
+  `feat/cmvng-v2-upgrade` branch at `98254613638e5b2c919e7fb3018053a83a261ef7`. Railway deployment
+  `abdd60fe-b704-4093-aa81-1aafdcb18e7a` reached `SUCCESS`. Live production acceptance resolved
+  STONK to the exact selected Meteora pool with 26 `1D` candles and verified all three profiles,
+  Price/MCAP/FDV views, `B1`–`B4`/`S1`/`X1`, URL-state restoration across reload, card generation,
+  main-chart annotations, and no app-origin console errors.
