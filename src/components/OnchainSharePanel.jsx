@@ -5,7 +5,7 @@ import {
   ONCHAIN_CARD_FORMATS,
   ONCHAIN_VALUE_MODES,
 } from "../lib/sharing/onchainShareModel.js";
-import { formatPrice, formatUsd } from "../lib/onchain/formatters.js";
+import { formatPercent, formatUsd } from "../lib/onchain/formatters.js";
 import { SANS, T } from "../styles/theme.js";
 
 const EMPTY_WARNINGS = Object.freeze([]);
@@ -18,21 +18,13 @@ const styles = {
     padding: 20,
     boxShadow: "0 16px 44px -34px rgba(14, 27, 51, 0.44)",
   },
-  header: {
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: 16,
-    flexWrap: "wrap",
-    marginBottom: 16,
-  },
   eyebrow: {
     display: "block",
     color: T.blue,
     fontFamily: SANS,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: 700,
-    letterSpacing: "0.08em",
+    letterSpacing: "0.06em",
     textTransform: "uppercase",
     marginBottom: 5,
   },
@@ -47,16 +39,16 @@ const styles = {
   copy: {
     color: T.ink2,
     fontFamily: SANS,
-    fontSize: 13,
+    fontSize: 14,
     lineHeight: 1.55,
-    margin: "6px 0 0",
+    margin: "7px 0 16px",
     maxWidth: 590,
   },
   summary: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
     gap: 8,
-    marginBottom: 18,
+    marginBottom: 14,
   },
   summaryItem: {
     background: T.card2,
@@ -68,27 +60,41 @@ const styles = {
     display: "block",
     color: T.ink2,
     fontFamily: SANS,
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: "0.05em",
-    textTransform: "uppercase",
+    fontSize: 12,
+    fontWeight: 600,
     marginBottom: 3,
   },
   summaryValue: {
     display: "block",
     color: T.ink,
     fontFamily: SANS,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: 700,
+    overflowWrap: "anywhere",
+  },
+  details: {
+    border: `1px solid ${T.line}`,
+    borderRadius: 14,
+    background: T.card2,
+    marginBottom: 14,
     overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
+  },
+  detailsSummary: {
+    alignItems: "center",
+    color: T.ink,
+    cursor: "pointer",
+    display: "flex",
+    fontFamily: SANS,
+    fontSize: 14,
+    fontWeight: 700,
+    minHeight: 44,
+    padding: "0 14px",
   },
   controlGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
     gap: 14,
-    marginBottom: 16,
+    padding: "2px 14px 14px",
   },
   legend: {
     color: T.ink2,
@@ -103,14 +109,14 @@ const styles = {
     gap: 7,
   },
   option: active => ({
-    minHeight: 42,
+    minHeight: 44,
     border: `1px solid ${active ? T.blue : T.line}`,
     borderRadius: 999,
     background: active ? T.blueSoft : T.card,
     color: active ? T.blue : T.ink2,
     cursor: "pointer",
     fontFamily: SANS,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: active ? 700 : 600,
     padding: "9px 14px",
   }),
@@ -123,14 +129,14 @@ const styles = {
     color: "#FFFFFF",
     cursor: "pointer",
     fontFamily: SANS,
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: 700,
     padding: "13px 18px",
   },
   preview: {
     display: "block",
     width: "100%",
-    maxHeight: 560,
+    maxHeight: 620,
     objectFit: "contain",
     background: T.card2,
     border: `1px solid ${T.line}`,
@@ -151,7 +157,7 @@ const styles = {
     color: T.blue,
     cursor: "pointer",
     fontFamily: SANS,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: 700,
     padding: "10px 12px",
   },
@@ -161,20 +167,20 @@ const styles = {
     fontSize: 12,
     lineHeight: 1.5,
     marginTop: 10,
+    minHeight: 18,
   },
   disclaimer: {
     color: T.ink2,
     fontFamily: SANS,
-    fontSize: 11,
+    fontSize: 12,
     lineHeight: 1.55,
-    margin: "14px 0 0",
+    margin: "10px 0 0",
   },
 };
 
-function safeFilename(symbol, profile, format) {
+function safeFilename(symbol, format) {
   const safeSymbol = String(symbol || "token").toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
-  const safeProfile = String(profile || "plan").toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
-  return `cmvng-${safeSymbol}-${safeProfile}-dca-${format}.png`;
+  return `cmvng-${safeSymbol}-dca-plan-${format}.png`;
 }
 
 async function dataUrlToFile(dataUrl, filename) {
@@ -193,13 +199,11 @@ function availableValueMode(preferredMode, marketCapUsd, fdvUsd) {
 export default function OnchainSharePanel({
   asset,
   plan,
-  profile,
-  reviewDays,
-  timeframeLabel,
   dataAsOf,
   marketDataAsOf,
   candleDataAsOf,
   valuationWarnings = EMPTY_WARNINGS,
+  warnings = EMPTY_WARNINGS,
   shareUrl,
   initialValueMode,
 }) {
@@ -215,23 +219,20 @@ export default function OnchainSharePanel({
   const [message, setMessage] = useState("");
   const generationVersion = useRef(0);
   const resolvedValueMode = valueMode === "marketCap" && !market.marketCapUsd
-      ? "price"
+    ? "price"
     : valueMode === "fdv" && !market.fdvUsd
-        ? "price"
+      ? "price"
       : valueMode;
-  const currentShareUrl = () => shareUrl || (typeof window !== "undefined" ? window.location.href : "");
   const model = useMemo(() => buildOnchainShareModel({
     asset,
     plan,
-    profile,
-    reviewDays,
-    timeframeLabel,
     valueMode: resolvedValueMode,
     dataAsOf,
     marketDataAsOf,
     candleDataAsOf,
     valuationWarnings,
-  }), [asset, candleDataAsOf, dataAsOf, marketDataAsOf, plan, profile, resolvedValueMode, reviewDays, timeframeLabel, valuationWarnings]);
+    warnings,
+  }), [asset, candleDataAsOf, dataAsOf, marketDataAsOf, plan, resolvedValueMode, valuationWarnings, warnings]);
 
   useEffect(() => {
     setValueMode(availableValueMode(initialValueMode, market.marketCapUsd, market.fdvUsd));
@@ -242,7 +243,7 @@ export default function OnchainSharePanel({
     setCardUrl(null);
     setGenerating(false);
     setMessage("");
-  }, [asset, candleDataAsOf, dataAsOf, marketDataAsOf, plan, profile, reviewDays, timeframeLabel, format, resolvedValueMode, valuationWarnings]);
+  }, [asset, candleDataAsOf, dataAsOf, format, marketDataAsOf, plan, resolvedValueMode, valuationWarnings, warnings]);
 
   useEffect(() => () => {
     generationVersion.current += 1;
@@ -250,7 +251,9 @@ export default function OnchainSharePanel({
 
   if (!model) return null;
 
-  const filename = safeFilename(model.token.symbol, model.profile.id, format);
+  const filename = safeFilename(model.token.symbol, format);
+  const currentShareUrl = () => shareUrl || (typeof window !== "undefined" ? window.location.href : "");
+
   const generate = async () => {
     if (generating) return;
     const version = generationVersion.current + 1;
@@ -262,22 +265,27 @@ export default function OnchainSharePanel({
       const result = await makeOnchainShareCard({
         asset,
         plan,
-        profile,
-        reviewDays,
-        timeframeLabel,
         valueMode: resolvedValueMode,
         dataAsOf,
         marketDataAsOf,
         candleDataAsOf,
         valuationWarnings,
+        warnings,
         format,
       });
       if (version !== generationVersion.current) return;
       setCardUrl(result);
-      setMessage("Card ready. Download it or share it with the live plan link.");
-      track("onchain_share_card_generated", { token: model.token.symbol, profile: model.profile.id, format, valueMode: model.mode });
+      setMessage("Plan card ready. Download it or share it with the live plan link.");
+      track("onchain_share_card_generated", {
+        token: model.token.symbol,
+        format,
+        valueMode: model.mode,
+        frequency: model.frequencyId,
+      });
     } catch (error) {
-      if (version === generationVersion.current) setMessage(error.message || "The card could not be generated.");
+      if (version === generationVersion.current) {
+        setMessage(error.message || "The card could not be generated.");
+      }
     } finally {
       if (version === generationVersion.current) setGenerating(false);
     }
@@ -304,8 +312,11 @@ export default function OnchainSharePanel({
   };
 
   const nativeShare = async () => {
-    const title = `${model.token.symbol} ${model.profile.label} DCA map`;
-    const text = `${formatUsd(model.budget)} budget · ${model.reviewDays}-day review window · B1–B4 potential entries · conditional S1 and X1.`;
+    const targetText = Number.isFinite(model.profitTargetPct)
+      ? ` aiming for ${formatPercent(model.profitTargetPct, 0)}`
+      : "";
+    const title = `${model.token.symbol} scheduled DCA plan`;
+    const text = `${formatUsd(model.totalAmountUsd)} over ${model.durationDays} days · ${model.buyFrequencyLabel.toLowerCase()}${targetText}. Illustrative simulation, not a forecast.`;
     const url = currentShareUrl();
     try {
       if (cardUrl) {
@@ -319,93 +330,113 @@ export default function OnchainSharePanel({
       await navigator.share({ title, text, url });
       track("onchain_share_clicked", { channel: "native_link" });
     } catch (error) {
-      if (error.name !== "AbortError") setMessage("Sharing was not available. You can download the card or copy its link.");
+      if (error.name !== "AbortError") {
+        setMessage("Sharing was not available. Download the card or copy its link.");
+      }
     }
   };
 
   return (
     <section aria-labelledby="onchain-share-title" style={styles.section}>
-      <header style={styles.header}>
-        <div>
-          <span style={styles.eyebrow}>Shareable analysis card</span>
-          <h3 id="onchain-share-title" style={styles.title}>Turn this DCA map into one clean card</h3>
-          <p style={styles.copy}>B1–B4, S1, X1, budget, duration and valuation zones stay together when you share the plan.</p>
-        </div>
-      </header>
+      <span style={styles.eyebrow}>Share your plan</span>
+      <h3 id="onchain-share-title" style={styles.title}>Generate a clean DCA plan card</h3>
+      <p style={styles.copy}>Share the amount, buy schedule, target and risk review without the technical clutter.</p>
 
       <div style={styles.summary} aria-label="Card summary">
-        <div style={styles.summaryItem}><span style={styles.summaryLabel}>Plan</span><strong style={styles.summaryValue}>{model.profile.label}</strong></div>
-        <div style={styles.summaryItem}><span style={styles.summaryLabel}>Budget</span><strong style={styles.summaryValue}>{formatUsd(model.budget)}</strong></div>
-        <div style={styles.summaryItem}><span style={styles.summaryLabel}>Plan window</span><strong style={styles.summaryValue}>{model.reviewDays}-day review</strong></div>
-        <div style={styles.summaryItem}><span style={styles.summaryLabel}>Average entry</span><strong style={styles.summaryValue}>{formatPrice(model.averageEntry)}</strong></div>
+        <div style={styles.summaryItem}>
+          <span style={styles.summaryLabel}>Invest</span>
+          <strong style={styles.summaryValue}>{formatUsd(model.totalAmountUsd)}</strong>
+        </div>
+        <div style={styles.summaryItem}>
+          <span style={styles.summaryLabel}>Schedule</span>
+          <strong style={styles.summaryValue}>{model.buyFrequencyLabel} · {model.durationDays} days</strong>
+        </div>
+        <div style={styles.summaryItem}>
+          <span style={styles.summaryLabel}>Plan</span>
+          <strong style={styles.summaryValue}>{model.plannedBuyCount.toLocaleString()} buys · {formatUsd(model.amountPerBuyUsd)} each</strong>
+        </div>
       </div>
 
-      <div style={styles.controlGrid}>
-        <fieldset style={{ border: 0, margin: 0, padding: 0 }}>
-          <legend style={styles.legend}>Show zones primarily in</legend>
-          <div style={styles.options}>
-            {ONCHAIN_VALUE_MODES.map(option => {
-              const unavailable = option.id === "marketCap"
-                ? !model.currentMarketCap
-                : option.id === "fdv"
-                  ? !model.currentFdv
-                  : false;
-              return (
+      <details style={styles.details}>
+        <summary style={styles.detailsSummary}>Card options</summary>
+        <div style={styles.controlGrid}>
+          <fieldset style={{ border: 0, margin: 0, padding: 0 }}>
+            <legend style={styles.legend}>Show levels in</legend>
+            <div style={styles.options}>
+              {ONCHAIN_VALUE_MODES.map(option => {
+                const unavailable = option.id === "marketCap"
+                  ? !model.current.marketCap
+                  : option.id === "fdv"
+                    ? !model.current.fdv
+                    : false;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    aria-pressed={resolvedValueMode === option.id}
+                    disabled={unavailable}
+                    onClick={() => setValueMode(option.id)}
+                    style={{
+                      ...styles.option(resolvedValueMode === option.id),
+                      cursor: unavailable ? "not-allowed" : "pointer",
+                      opacity: unavailable ? 0.45 : 1,
+                    }}
+                  >
+                    {option.label}{unavailable ? " unavailable" : ""}
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
+
+          <fieldset style={{ border: 0, margin: 0, padding: 0 }}>
+            <legend style={styles.legend}>Card size</legend>
+            <div style={styles.options}>
+              {ONCHAIN_CARD_FORMATS.map(option => (
                 <button
                   key={option.id}
                   type="button"
-                  aria-pressed={resolvedValueMode === option.id}
-                  disabled={unavailable}
-                  onClick={() => setValueMode(option.id)}
-                  style={{ ...styles.option(resolvedValueMode === option.id), opacity: unavailable ? 0.45 : 1, cursor: unavailable ? "not-allowed" : "pointer" }}
+                  aria-pressed={format === option.id}
+                  onClick={() => setFormat(option.id)}
+                  style={styles.option(format === option.id)}
                 >
-                  {option.label}{unavailable ? " unavailable" : ""}
+                  {option.label}
                 </button>
-              );
-            })}
-          </div>
-        </fieldset>
+              ))}
+            </div>
+          </fieldset>
+        </div>
+      </details>
 
-        <fieldset style={{ border: 0, margin: 0, padding: 0 }}>
-          <legend style={styles.legend}>Card size</legend>
-          <div style={styles.options}>
-            {ONCHAIN_CARD_FORMATS.map(option => (
-              <button
-                key={option.id}
-                type="button"
-                aria-pressed={format === option.id}
-                onClick={() => setFormat(option.id)}
-                style={styles.option(format === option.id)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </fieldset>
-      </div>
-
-      <button type="button" onClick={generate} disabled={generating} style={{ ...styles.primary, opacity: generating ? 0.6 : 1 }}>
-        {generating ? "Generating card…" : "Generate DCA card"}
+      <button
+        type="button"
+        onClick={generate}
+        disabled={generating}
+        style={{ ...styles.primary, opacity: generating ? 0.6 : 1 }}
+      >
+        {generating ? "Generating card…" : "Generate plan card"}
       </button>
 
       {cardUrl && (
         <img
           src={cardUrl}
-          alt={`${model.token.symbol} ${model.profile.label} DCA share-card preview`}
+          alt={`${model.token.symbol} scheduled DCA plan-card preview`}
           style={styles.preview}
         />
       )}
 
-      <div style={styles.actions}>
-        {cardUrl && <button type="button" onClick={download} style={styles.secondary}>Download PNG</button>}
-        <button type="button" onClick={copyLink} style={styles.secondary}>Copy live link</button>
-        {typeof navigator !== "undefined" && navigator.share && (
-          <button type="button" onClick={nativeShare} style={styles.secondary}>Share{cardUrl ? " card" : " plan"}</button>
-        )}
-      </div>
+      {cardUrl && (
+        <div style={styles.actions}>
+          <button type="button" onClick={download} style={styles.secondary}>Download PNG</button>
+          <button type="button" onClick={copyLink} style={styles.secondary}>Copy live link</button>
+          {typeof navigator !== "undefined" && navigator.share && (
+            <button type="button" onClick={nativeShare} style={styles.secondary}>Share card</button>
+          )}
+        </div>
+      )}
 
       <div role="status" aria-live="polite" style={styles.status}>{message}</div>
-      <p style={styles.disclaimer}>Simulation only. S1 is a conditional target reference after planned fills; no sale size or order is modeled. X1 requires the selected-timeframe candle to close below the level before manual reassessment—it is not an automatic stop. Outcomes assume all planned B zones fill and exclude fees, taxes, slippage and price impact. Implied market-cap and FDV zones use the current reported supply ratio. Verify contract safety and liquidity independently.</p>
+      <p style={styles.disclaimer}>Illustrative simulation only—not a forecast or an order. MCAP and FDV levels assume the current reported supply ratio. Verify contract safety and liquidity independently.</p>
     </section>
   );
 }

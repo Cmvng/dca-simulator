@@ -1,4 +1,4 @@
-// Contract-analyzer browser smoke with deterministic mocked provider data.
+// Scheduled-DCA contract-flow browser smoke with deterministic mocked provider data.
 // Expects `dist/` from `npm run build`; starts the standalone server itself.
 
 import { spawn } from "node:child_process";
@@ -16,9 +16,9 @@ const BAD_CONTRACT = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 const POOL_A = "0x2222222222222222222222222222222222222222";
 const POOL_B = "0x4444444444444444444444444444444444444444";
 const AS_OF = "2026-08-30T12:00:00.000Z";
-const AS_OF_SECONDS = Date.parse(AS_OF) / 1000;
+const AS_OF_SECONDS = Date.parse(AS_OF) / 1_000;
 
-const candles = Array.from({ length: 120 }, (_, index) => {
+const fourHourCandles = Array.from({ length: 120 }, (_, index) => {
   const trend = 1 + index * 0.0015;
   const open = trend + Math.sin((index - 1) / 5) * 0.045;
   const close = trend + Math.sin(index / 5) * 0.045;
@@ -31,7 +31,10 @@ const candles = Array.from({ length: 120 }, (_, index) => {
     volume: 18_000 + index * 75,
   };
 });
-const shortDailyCandles = candles.slice(0, 26).map((candle, index) => ({
+
+// Twenty-six real daily candles are intentionally enough for a volatility-based
+// schedule. This protects the mobile bug that previously blocked plans below 30.
+const dailyCandles = fourHourCandles.slice(0, 26).map((candle, index) => ({
   ...candle,
   time: AS_OF_SECONDS - ((25 - index) * 86_400),
 }));
@@ -55,7 +58,7 @@ function asset(poolAddress, liquidityUsd) {
       symbol: "USDC",
     },
     market: {
-      priceUsd: candles.at(-1).close,
+      priceUsd: fourHourCandles.at(-1).close,
       liquidityUsd,
       volume24h: 250_000,
       marketCapUsd: 2_000_000,
@@ -80,6 +83,21 @@ async function waitForServer() {
   throw new Error("Standalone server did not become ready.");
 }
 
+function requireQuery(url, expected) {
+  const params = new URL(url).searchParams;
+  for (const [key, value] of Object.entries(expected)) {
+    if (params.get(key) !== String(value)) {
+      throw new Error(`expected ${key}=${value}, received ${params.get(key)}`);
+    }
+  }
+}
+
+async function settle(page) {
+  await page.evaluate(() => new Promise(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+}
+
 const server = spawn(process.execPath, ["server.js"], {
   env: { ...process.env, PORT: String(PORT) },
   stdio: "ignore",
@@ -87,6 +105,7 @@ const server = spawn(process.execPath, ["server.js"], {
 
 let browser;
 let lastCandleUrl = null;
+let failHourlyCandles = false;
 const consoleErrors = [];
 const step = async (name, fn) => {
   try {
@@ -131,7 +150,8 @@ try {
   await context.route(/\/api\/candles(?:\?.*)?$/, route => {
     lastCandleUrl = new URL(route.request().url());
     if (
-      lastCandleUrl.searchParams.get("timeframe") === "hour"
+      failHourlyCandles
+      && lastCandleUrl.searchParams.get("timeframe") === "hour"
       && lastCandleUrl.searchParams.get("aggregate") === "1"
     ) {
       return route.fulfill({
@@ -143,8 +163,8 @@ try {
       });
     }
     const responseCandles = lastCandleUrl.searchParams.get("timeframe") === "day"
-      ? shortDailyCandles
-      : candles;
+      ? dailyCandles
+      : fourHourCandles;
     return route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -165,155 +185,235 @@ try {
   });
   page.on("pageerror", error => consoleErrors.push(`PAGEERROR: ${error.message}`));
 
-  await step("contract analyzer renders a real chart canvas", async () => {
+  const amount = page.getByLabel(/total (?:DCA )?(?:amount|budget)/i);
+  const frequency = page.getByLabel(/buy every/i);
+  const duration = page.getByLabel(/DCA duration in days/i);
+  const target = page.getByLabel(/profit target/i);
+  const generate = page.locator(".simple-plan-builder__submit");
+
+  await step("contract opens one simple scheduled-DCA plan", async () => {
     await page.goto(`${BASE}/contract`, { waitUntil: "domcontentloaded" });
     await page.fill("#contract-address", CONTRACT);
     await page.click('.contract-form button[type="submit"]');
     await page.waitForSelector(".token-workspace");
-    await page.waitForFunction(() => document.querySelector(".cmvng-dca-chart__source")?.textContent.includes("120 candles"));
-    await page.waitForSelector(".cmvng-dca-chart__canvas canvas");
-    const profileCount = await page.locator(".cmvng-plan-card").count();
-    if (profileCount !== 3) throw new Error(`expected 3 visible plan profiles, found ${profileCount}`);
-    if (await page.locator(".cmvng-plan-card--selected").count() !== 1) {
-      throw new Error("exactly one plan profile should be selected");
+    await frequency.waitFor();
+
+    const optionValues = await frequency.locator("option").evaluateAll(options => options.map(option => option.value));
+    if (optionValues.length !== 5) throw new Error(`expected 5 buy-frequency options, found ${optionValues.length}`);
+    for (const value of ["1h", "6h", "12h", "daily", "weekly"]) {
+      if (!optionValues.includes(value)) throw new Error(`missing ${value} buy-frequency option`);
     }
-    const executionCount = await page.locator(".execution-step--buy").count();
-    if (executionCount !== 4) throw new Error(`expected 4 execution steps, found ${executionCount}`);
-    for (const markerId of ["B1", "B2", "B3", "B4", "S1", "X1"]) {
-      await page.waitForSelector(`[data-marker-id="${markerId}"]:not([hidden])`);
+
+    await generate.click();
+    await page.waitForSelector(".cmvng-scheduled-chart__canvas canvas", { timeout: 10_000 });
+    await page.waitForSelector(".scheduled-plan-summary");
+
+    if (await page.locator(".cmvng-scheduled-chart").count() !== 1) {
+      throw new Error("the result should contain exactly one primary DCA chart");
     }
-    if (!(await page.textContent(".execution-map")).includes("S1 conditional target reference")) {
-      throw new Error("conditional S1 execution copy is missing");
+    if (await page.locator(".cmvng-plan-card, .plan-profile-selector").count()) {
+      throw new Error("legacy plan-profile cards are still visible");
     }
-    const executionText = await page.textContent(".execution-map");
-    if (!executionText.includes("30-day review") || !executionText.includes("Review by")) {
-      throw new Error("monitoring/review window is missing");
+    const technicalDetails = page.locator("details.simple-technical-details");
+    if (await technicalDetails.count() !== 1 || await technicalDetails.getAttribute("open") !== null) {
+      throw new Error("technical evidence should start inside one closed disclosure");
     }
-    if (await page.locator(".timeframe-control button").count() !== 5) {
-      throw new Error("timeframe controls should expose five distinct candle resolutions");
+
+    const bodyText = await page.locator("body").innerText();
+    for (const jargon of ["B1–B4", "B1-B4", "S1", "X1"]) {
+      if (bodyText.includes(jargon)) throw new Error(`legacy ${jargon} jargon is still visible`);
     }
-    if (await page.locator('.timeframe-control button:has-text("MAX")').count()) {
-      throw new Error("duplicate MAX timeframe is still present");
+
+    const chartCopy = await page.locator(".cmvng-scheduled-chart").innerText();
+    if (!/not a (?:price )?forecast/i.test(chartCopy)) {
+      throw new Error("the chart does not clearly label the volatility sample as not a forecast");
     }
-    if (!(await page.textContent(".cmvng-dca-chart__symbol")).includes("MCAP")) {
-      throw new Error("verified market cap should be the initial valuation chart mode");
+    if (!/B · planned buy/i.test(chartCopy) || !/S · profit exit/i.test(chartCopy)) {
+      throw new Error("the chart legend is missing clear buy and profit-exit markers");
     }
-    if (await page.locator('.value-mode-control button:has-text("FDV")').count() !== 1) {
-      throw new Error("price / market-cap / FDV controls are incomplete");
+    const chartLabel = await page.locator(".cmvng-scheduled-chart__canvas").getAttribute("aria-label");
+    if (!/planned buy markers/i.test(chartLabel || "")) {
+      throw new Error("the chart does not expose its scheduled buys to assistive technology");
     }
-    if (await page.locator('.plan-sticky-actions button:has-text("Customize card")').count() !== 1) {
-      throw new Error("sticky plan-card action is missing");
+
+    const valueButtons = page.locator('.value-mode-control button, [aria-label="Chart value unit"] button');
+    if (await valueButtons.count() !== 3) throw new Error("Price / MCAP / FDV controls are incomplete");
+    for (const label of ["Price", "MCAP", "FDV"]) {
+      if (await valueButtons.filter({ hasText: label }).count() !== 1) {
+        throw new Error(`missing ${label} value control`);
+      }
     }
-    const box = await page.locator(".cmvng-dca-chart__canvas canvas").first().boundingBox();
-    if (!box || box.width < 100 || box.height < 100) throw new Error("chart canvas has no usable dimensions");
-    if (lastCandleUrl?.searchParams.get("aggregate") !== "4") throw new Error("default 4-hour request was not sent");
-    const analyzerUrl = new URL(page.url());
-    if (
-      analyzerUrl.searchParams.get("address") !== CONTRACT
-      || analyzerUrl.searchParams.get("interval") !== "4h"
-      || analyzerUrl.searchParams.get("amount") !== "500"
-      || analyzerUrl.searchParams.get("duration") !== "30"
-      || analyzerUrl.searchParams.get("plan") !== "balanced"
-      || analyzerUrl.searchParams.get("unit") !== "marketCap"
-      || analyzerUrl.searchParams.get("target") !== "auto"
-    ) {
-      throw new Error("the complete plan context was not persisted in the URL");
+
+    const canvasBox = await page.locator(".cmvng-scheduled-chart__canvas canvas").first().boundingBox();
+    if (!canvasBox || canvasBox.width < 100 || canvasBox.height < 100) {
+      throw new Error("chart canvas has no usable dimensions");
     }
+    requireQuery(page.url(), {
+      address: CONTRACT,
+      amount: 500,
+      duration: 30,
+      frequency: "daily",
+      target: 100,
+      unit: "marketCap",
+      interval: "4h",
+    });
     if (consoleErrors.length) throw new Error(consoleErrors.join(" | "));
   });
 
-  await step("alternative pool reloads candles", async () => {
+  await step("weekly plans work with 26 daily candles", async () => {
+    await frequency.selectOption("weekly");
+    const dailyRequest = page.waitForRequest(request => {
+      const url = new URL(request.url());
+      return url.pathname === "/api/candles"
+        && url.searchParams.get("timeframe") === "day"
+        && url.searchParams.get("aggregate") === "1";
+    });
+    await generate.click();
+    await dailyRequest;
+    await page.waitForFunction(() => (
+      new URL(window.location.href).searchParams.get("frequency") === "weekly"
+      && document.querySelector(".scheduled-plan-summary")?.textContent.includes("Every week")
+    ));
+    if ((await page.locator(".simple-plan-builder").innerText()).includes("needs more price history")) {
+      throw new Error("26 valid daily candles incorrectly blocked the schedule");
+    }
+    requireQuery(page.url(), { frequency: "weekly", interval: "1d" });
+  });
+
+  await step("amount, cadence, duration, target, and value unit persist", async () => {
+    await amount.fill("500.50");
+    await frequency.selectOption("6h");
+    await duration.fill("60");
+    await target.fill("100");
+    const nextCandleRequest = page.waitForRequest(request => {
+      const url = new URL(request.url());
+      return url.pathname === "/api/candles"
+        && url.searchParams.get("timeframe") === "hour"
+        && url.searchParams.get("aggregate") === "1";
+    });
+    await generate.click();
+    await nextCandleRequest;
+    await page.getByRole("button", { name: "FDV", exact: true }).first().click();
+    await page.waitForSelector(".cmvng-scheduled-chart__canvas canvas");
+
+    requireQuery(page.url(), {
+      address: CONTRACT,
+      amount: 500.5,
+      duration: 60,
+      frequency: "6h",
+      target: 100,
+      unit: "fdv",
+      interval: "1h",
+    });
+    if (new URL(page.url()).searchParams.has("plan") || new URL(page.url()).searchParams.has("touches")) {
+      throw new Error("legacy profile/touch state remains in the URL");
+    }
+    const summaryText = await page.locator(".scheduled-plan-summary").innerText();
+    if (!/Every 6 hours/i.test(summaryText) || !/60 days/i.test(summaryText)) {
+      throw new Error("the plain-language summary did not update to the chosen schedule");
+    }
+  });
+
+  await step("alternative pool reloads data and survives the share card", async () => {
+    await page.locator("details.simple-technical-details").evaluate(element => {
+      element.open = true;
+    });
     const nextRequest = page.waitForRequest(request => {
       const url = new URL(request.url());
       return url.pathname === "/api/candles" && url.searchParams.get("pool") === POOL_B;
     });
     await page.selectOption("#pool-source", `base:${POOL_B}`);
     await nextRequest;
-    if (lastCandleUrl?.searchParams.get("pool") !== POOL_B) throw new Error("alternative pool was not requested");
-    if (new URL(page.url()).searchParams.get("pool") !== `base:${POOL_B}`) throw new Error("selected pool was not persisted in the URL");
+    if (lastCandleUrl?.searchParams.get("pool") !== POOL_B) {
+      throw new Error("alternative pool was not requested");
+    }
+    await page.waitForFunction(expectedPool => (
+      new URL(window.location.href).searchParams.get("pool") === expectedPool
+      && document.querySelector(".cmvng-scheduled-chart__canvas canvas")
+    ), `base:${POOL_B}`);
+    requireQuery(page.url(), { pool: `base:${POOL_B}` });
+    await page.locator("details.simple-technical-details").evaluate(element => {
+      element.open = false;
+    });
+
+    const cardButton = page.getByRole("button", { name: /generate plan card/i });
+    if (await cardButton.count() !== 1) throw new Error("Generate plan card action is missing");
+    await cardButton.click();
+    const preview = page.locator('img[alt*="scheduled DCA plan-card preview"]');
+    await preview.waitFor({ timeout: 10_000 });
+    if (!(await preview.getAttribute("src"))?.startsWith("data:image/png")) {
+      throw new Error("generated plan card is not a PNG data URL");
+    }
   });
 
-  await step("contract route has no mobile overflow", async () => {
+  await step("scheduled-DCA controls and chart fit 320px and 390px", async () => {
     for (const width of [320, 390]) {
       await page.setViewportSize({ width, height: width === 320 ? 700 : 844 });
-      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      await settle(page);
+      const overflow = await page.evaluate(() => (
+        document.documentElement.scrollWidth - document.documentElement.clientWidth
+      ));
       if (overflow > 2) throw new Error(`horizontal overflow ${overflow}px at ${width}px`);
-      const chartTop = (await page.locator(".chart-panel").boundingBox())?.y;
-      const settingsTop = (await page.locator(".plan-studio").boundingBox())?.y;
-      if (!(settingsTop < chartTop)) throw new Error("amount, duration, and plan choice must precede the chart on mobile");
+
+      const builderTop = (await amount.boundingBox())?.y;
+      const chartTop = (await page.locator(".cmvng-scheduled-chart").boundingBox())?.y;
+      if (!(Number.isFinite(builderTop) && Number.isFinite(chartTop) && builderTop < chartTop)) {
+        throw new Error("amount, frequency, duration, and target must precede the chart on mobile");
+      }
     }
-    await page.screenshot({ path: join(SCREENSHOT_DIR, "cmvng-contract-mobile.png"), fullPage: false });
+    await page.screenshot({ path: join(SCREENSHOT_DIR, "cmvng-scheduled-contract-mobile.png"), fullPage: false });
   });
 
-  await step("26 daily candles build a labeled volatility-reference plan", async () => {
-    await page.click('.timeframe-control button:has-text("1D")');
-    await page.waitForFunction(() => document.querySelector(".cmvng-dca-chart__source")?.textContent.includes("26 candles"));
-    await page.waitForSelector('[data-marker-id="S1"]:not([hidden])');
-    const executionText = await page.textContent(".execution-map");
-    if (!executionText.includes("Volatility-reference execution ladder")) throw new Error("short-history plan mode is not clearly labeled");
-    if ((await page.textContent(".plan-studio")).includes("Plans need more evidence")) throw new Error("26 daily candles incorrectly blocked the plan");
-    if (new URL(page.url()).searchParams.get("interval") !== "1d") throw new Error("daily interval was not persisted in the URL");
-  });
-
-  await step("decimal budgets are preserved", async () => {
-    const budget = page.locator('input[aria-label="Total DCA budget in US dollars"]');
-    await budget.fill("500.50");
-    await page.locator(".plan-studio__heading").click();
-    if (await budget.inputValue() !== "500.5") throw new Error("decimal budget was not preserved");
-  });
-
-  await step("profile, duration, target, valuation, and touch controls update the plan", async () => {
-    await page.locator(".cmvng-plan-card").filter({ hasText: "Early entry" }).click();
-    await page.selectOption('label:has-text("Monitoring duration") select', "60");
-    await page.selectOption('label:has-text("Conditional S1 target") select', "100");
-    await page.click('.value-mode-control button:has-text("FDV")');
-    await page.check('.touch-toggle input[type="checkbox"]');
-    await page.waitForSelector(".cmvng-dca-chart__touch-notice");
-    const url = new URL(page.url());
-    if (
-      url.searchParams.get("plan") !== "aggressive"
-      || url.searchParams.get("duration") !== "60"
-      || url.searchParams.get("target") !== "100"
-      || url.searchParams.get("unit") !== "fdv"
-      || url.searchParams.get("touches") !== "1"
-    ) {
-      throw new Error("selected plan controls were not persisted");
-    }
-    if (!(await page.textContent("#selected-chart-title")).includes("Early entry")) {
-      throw new Error("selected profile was not applied to the main chart");
-    }
-  });
-
-  await step("contract, pool, and interval survive reload", async () => {
+  await step("complete scheduled plan state survives reload", async () => {
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.waitForFunction(() => document.querySelector(".cmvng-dca-chart__source")?.textContent.includes("26 candles"));
-    if (await page.locator("#pool-source").inputValue() !== `base:${POOL_B}`) throw new Error("pool selection was not restored");
-    if ((await page.locator('.timeframe-control button:has-text("1D")').getAttribute("aria-pressed")) !== "true") throw new Error("interval was not restored");
-    if ((await page.locator('.value-mode-control button:has-text("FDV")').getAttribute("aria-pressed")) !== "true") throw new Error("valuation unit was not restored");
-    if (!(await page.locator(".cmvng-plan-card").filter({ hasText: "Early entry" }).getAttribute("class")).includes("selected")) throw new Error("plan profile was not restored");
-    if (await page.locator('label:has-text("Monitoring duration") select').inputValue() !== "60") throw new Error("duration was not restored");
-    if (!(await page.locator('.touch-toggle input[type="checkbox"]').isChecked())) throw new Error("touch disclosure was not restored");
-    await page.waitForSelector(".cmvng-dca-chart__touch-notice");
-    await page.waitForSelector('[data-marker-id="S1"]:not([hidden])');
+    await page.waitForSelector(".cmvng-scheduled-chart__canvas canvas", { timeout: 10_000 });
+    if (await amount.inputValue() !== "500.5") throw new Error("decimal amount was not restored");
+    if (await frequency.inputValue() !== "6h") throw new Error("buy frequency was not restored");
+    if (await duration.inputValue() !== "60") throw new Error("duration was not restored");
+    if (await target.inputValue() !== "100") throw new Error("profit target was not restored");
+    if ((await page.getByRole("button", { name: "FDV", exact: true }).first().getAttribute("aria-pressed")) !== "true") {
+      throw new Error("FDV mode was not restored");
+    }
+    if (await page.locator("#pool-source").inputValue() !== `base:${POOL_B}`) {
+      throw new Error("pool selection was not restored");
+    }
   });
 
-  await step("timeframe errors stay inside the chart", async () => {
-    await page.click('.timeframe-control button:has-text("1H")');
-    const selector = '.cmvng-dca-chart__state[role="alert"]';
-    await page.waitForSelector(selector);
-    const text = await page.textContent(selector);
-    if (!text.includes("Smoke candles are unavailable.")) throw new Error("missing candle error message");
+  await step("candle errors stay inside the token workspace", async () => {
+    await frequency.selectOption("daily");
+    const fourHourRequest = page.waitForRequest(request => {
+      const url = new URL(request.url());
+      return url.pathname === "/api/candles"
+        && url.searchParams.get("timeframe") === "hour"
+        && url.searchParams.get("aggregate") === "4";
+    });
+    await generate.click();
+    await fourHourRequest;
+    await page.waitForFunction(() => (
+      new URL(window.location.href).searchParams.get("frequency") === "daily"
+      && document.querySelector(".cmvng-scheduled-chart__canvas canvas")
+    ));
+    failHourlyCandles = true;
+    await frequency.selectOption("1h");
+    await generate.click();
+    await page.waitForFunction(() => document.body.innerText.includes("Smoke candles are unavailable."));
+    if (!(await page.locator(".token-workspace").innerText()).includes("Smoke candles are unavailable.")) {
+      throw new Error("missing localized candle error message");
+    }
+    failHourlyCandles = false;
   });
 
   await step("contract-resolution errors replace stale results", async () => {
     await page.fill("#contract-address", BAD_CONTRACT);
     await page.click('.contract-form button[type="submit"]');
-    const selector = '.inline-alert[role="alert"]';
-    await page.waitForSelector(selector);
-    const text = await page.textContent(selector);
-    if (!text.includes("Smoke token was not found.")) throw new Error("missing resolution error message");
-    if (await page.locator(".token-workspace").count()) throw new Error("stale token results remained visible");
+    const alert = page.locator('.inline-alert[role="alert"]');
+    await alert.waitFor();
+    if (!(await alert.innerText()).includes("Smoke token was not found.")) {
+      throw new Error("missing resolution error message");
+    }
+    if (await page.locator(".token-workspace").count()) {
+      throw new Error("stale token results remained visible");
+    }
   });
 
   await context.close();
