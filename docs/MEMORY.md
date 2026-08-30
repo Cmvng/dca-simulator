@@ -124,12 +124,22 @@
 | The Clear Blue shell remains canonical; only the embedded candlestick instrument may use a dark navy trading canvas | Preserves CMVNG brand cohesion while honoring the owner's Fomo-style chart reference |
 | No future candles or projected price path are drawn | The chart displays real historical OHLCV plus horizontal scenario levels only |
 | Market-data checks and data confidence are not a contract-security score | Honeypots, taxes, authorities, holder concentration, and executable slippage remain unknown until separate providers are integrated |
+| A conservative ladder may render with 20–29 candles only when they span at least 24 hours | ATR needs a usable sample, while withholding structural language prevents a short history from becoming false market-structure evidence |
+| Adaptive mode requires at least 30 candles, seven elapsed days, and two repeated support zones | All three conditions are necessary; repeated-looking lows in a 20–29-candle sample remain volatility references |
+| Main-chart execution labels are `B1`–`B4` for conditional buys and `S1` for the post-fill goal | Short identifiers make the trigger sequence legible on mobile while the adjacent map carries allocation, range, and risk detail |
+| Buy zones are shaded ranges rather than single-price promises | The calculation produces upper/lower bands; showing only a midpoint would imply false fill precision |
+| The review window is a user-selected reassessment period, not a forecast horizon or scheduled trade | It gives a stale-plan checkpoint without inventing future candles, dates of fills, or guaranteed execution |
+| Mobile contract analysis stays chart-first in both DOM and visual order | Users asked to see the plan immediately, and matching orders preserves keyboard and screen-reader navigation |
+| Candle eligibility includes requested-interval density and freshness | A sparse or abandoned pool must not look current merely because 20 old trades span more than 24 hours |
+| B1–B4 allocations conserve integer cents and buy bands cannot overlap | Displayed allocations must add to the stated budget, and one market price must not ambiguously trigger several planned tranches |
+| Contract, exact pool, and candle interval persist in query parameters | A refreshed or shared analysis must reopen the same evidence context instead of silently changing pools |
 
 ### Onchain operational constraints
 
 - Public GeckoTerminal rate-limit documentation currently differs between a dynamic roughly 10 calls/minute and an older 30 calls/minute figure. Budget for the lower allowance, cache responses, and surface `429` states.
-- GeckoTerminal documents at most roughly six months per OHLCV request; the UI calls this `MAX`, never `ALL`, and reports the actual returned history span.
+- GeckoTerminal documents a provider-limited OHLCV window. The UI reports actual returned history and no longer exposes the old `MAX` control because it duplicated the `1D` request instead of loading a distinct range.
 - An address is supported only when an indexed pool contains the exact token, returns usable USD pricing/OHLCV, and passes minimum candle/liquidity gates.
+- The base history gate is 20 valid candles spanning at least 24 hours, with at least 20% expected-interval coverage and a latest bar no older than three intervals (minimum one hour). Samples below 30 candles can produce only volatility-reference plans; structural mode remains gated at 30 candles plus seven days and two repeated zones.
 - Market cap and FDV remain separate. Missing market cap is “unverified,” not zero and not FDV.
 - The analyzer context displays network, pool, DEX, counter token, provider timestamps, and the onchain engine label; the pure calculation result intentionally contains only calculation inputs/outputs.
 
@@ -145,3 +155,10 @@
   `web-production-84b5c.up.railway.app`. Live browser verification confirmed the original planner
   at `/` and a populated `/contract` PEPE analysis with the exact Uniswap V2 pool, 500 real 4-hour
   candles, four buy zones, weighted entry, goal, and invalidation.
+- **2026-08-30 (execution-map completion)** — Replaced the 30-candle all-or-nothing rule with a
+  two-tier evidence contract: 20 candles plus 24 hours can show a conservative volatility-reference
+  plan, while adaptive structure still requires 30 candles, seven days, and two repeated supports.
+  The main experience now exposes shaded `B1`–`B4` trigger bands, `S1`, allocation/range details,
+  invalidation, and a review window without predicting future candles. Mobile order is chart-first
+  and the full six-metric context remains visible. Follow-up hardening added non-overlapping bands,
+  exact-cent allocation, density/freshness gates, stale-response IDs, and refreshable URL context.

@@ -1,4 +1,6 @@
 const DEFAULT_ALLOCATIONS = [15, 20, 25, 40];
+const MIN_REFERENCE_CANDLES = 20;
+const MIN_STRUCTURAL_CANDLES = 30;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const finitePositive = value => Number.isFinite(Number(value)) && Number(value) > 0;
@@ -7,6 +9,17 @@ const finiteNonNegative = value => {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : null;
 };
+
+function allocateBudgetByPercent(budget, percentages) {
+  const totalCents = Math.round(budget * 100);
+  const cents = percentages.map(percent => Math.floor((totalCents * percent) / 100));
+  let remainder = totalCents - cents.reduce((sum, amount) => sum + amount, 0);
+  for (let index = 0; remainder > 0; index = (index + 1) % cents.length) {
+    cents[index] += 1;
+    remainder -= 1;
+  }
+  return cents.map(amount => amount / 100);
+}
 
 export function normalizeCandles(candles = []) {
   const byTime = new Map();
@@ -92,7 +105,7 @@ function findSupportClusters(candles, currentPrice, atr) {
     .sort((a, b) => b.price - a.price);
 }
 
-export function assessMarketData(market = {}, rawCandles = []) {
+export function assessMarketData(market = {}, rawCandles = [], options = {}) {
   const candles = normalizeCandles(rawCandles);
   const lastClose = candles.at(-1)?.close || 0;
   const currentPrice = finitePositive(market.priceUsd) ? Number(market.priceUsd) : lastClose;
@@ -105,21 +118,44 @@ export function assessMarketData(market = {}, rawCandles = []) {
     ? Math.max(0, (candles.at(-1).time - candles[0].time) / 3_600)
     : 0;
   const historyDays = historyHours / 24;
+  const expectedIntervalSeconds = finitePositive(options.expectedIntervalSeconds)
+    ? Number(options.expectedIntervalSeconds)
+    : null;
+  const expectedBarCount = expectedIntervalSeconds && candles.length > 1
+    ? Math.floor((candles.at(-1).time - candles[0].time) / expectedIntervalSeconds) + 1
+    : null;
+  const coverageRatio = expectedBarCount
+    ? Math.min(1, candles.length / expectedBarCount)
+    : null;
+  const asOfMilliseconds = options.dataAsOf ? Date.parse(options.dataAsOf) : NaN;
+  const latestCandleAgeHours = Number.isFinite(asOfMilliseconds) && candles.length
+    ? Math.max(0, ((asOfMilliseconds / 1000) - candles.at(-1).time) / 3_600)
+    : null;
+  const staleThresholdHours = expectedIntervalSeconds
+    ? Math.max(1, (expectedIntervalSeconds * 3) / 3_600)
+    : 24;
   const createdAt = market.poolCreatedAt ? Date.parse(market.poolCreatedAt) : NaN;
   const ageDays = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 86_400_000) : null;
   const blockers = [];
   const warnings = [];
 
   if (!finitePositive(currentPrice)) blockers.push("No usable USD price was returned for the selected pool.");
-  if (candles.length < 30) blockers.push("At least 30 valid candles are required before plotting DCA zones.");
-  if (candles.length >= 30 && historyHours < 24) blockers.push("The selected interval must cover at least 24 hours before plotting DCA zones.");
+  if (candles.length < MIN_REFERENCE_CANDLES) blockers.push(`At least ${MIN_REFERENCE_CANDLES} valid candles are required before plotting DCA references.`);
+  if (historyHours < 24) blockers.push("The selected interval must cover at least 24 hours before plotting DCA references.");
+  if (coverageRatio !== null && expectedBarCount >= MIN_REFERENCE_CANDLES && coverageRatio < 0.2) blockers.push("The selected interval is too sparse to support a DCA reference ladder.");
+  if (
+    latestCandleAgeHours !== null
+    && latestCandleAgeHours > staleThresholdHours
+  ) blockers.push("The latest candle is stale for the selected interval.");
   if (liquidity === null) blockers.push("No usable pool-liquidity value was returned.");
   else if (liquidity < 10_000) blockers.push("Pool liquidity is below the $10,000 minimum for this simulator.");
   if (divergence > 0.35) blockers.push("The live quote and latest candle differ too much to produce reliable levels.");
 
-  if (candles.length >= 30 && candles.length < 80) warnings.push("Limited candle history lowers confidence in support zones.");
+  if (candles.length >= MIN_REFERENCE_CANDLES && candles.length < MIN_STRUCTURAL_CANDLES) warnings.push("Fewer than 30 candles are available, so this ladder is limited to volatility references and cannot claim structural support.");
+  else if (candles.length >= MIN_STRUCTURAL_CANDLES && candles.length < 80) warnings.push("Limited candle history lowers confidence in support zones.");
   if (historyHours >= 24 && historyDays < 7) warnings.push("The selected interval covers less than seven days, so levels are short-window volatility references.");
   else if (historyDays >= 7 && historyDays < 30) warnings.push("The selected interval covers less than 30 days of market history.");
+  if (coverageRatio !== null && coverageRatio >= 0.2 && coverageRatio < 0.5) warnings.push("Many expected candle intervals are empty, which lowers evidence quality.");
   if (liquidity !== null && liquidity >= 10_000 && liquidity < 50_000) warnings.push("Thin liquidity can cause severe slippage and unstable prices.");
   if (volume24h === null) warnings.push("24-hour volume is unavailable, which lowers confidence in pool activity.");
   else if (volume24h < 1_000) warnings.push("Very low 24-hour volume can make candles sparse or easy to manipulate.");
@@ -139,6 +175,9 @@ export function assessMarketData(market = {}, rawCandles = []) {
   if (historyHours < 24) score -= 30;
   else if (historyDays < 7) score -= 25;
   else if (historyDays < 30) score -= 10;
+  if (coverageRatio !== null && coverageRatio < 0.2) score -= 25;
+  else if (coverageRatio !== null && coverageRatio < 0.5) score -= 12;
+  if (latestCandleAgeHours !== null && latestCandleAgeHours > staleThresholdHours) score -= 25;
   if (ageDays !== null && ageDays < 2) score -= 15;
   else if (ageDays !== null && ageDays < 7) score -= 7;
   if (atrPct > 0.25) score -= 18;
@@ -166,6 +205,10 @@ export function assessMarketData(market = {}, rawCandles = []) {
     atrPct,
     historyHours,
     historyDays,
+    expectedBarCount,
+    coverageRatio,
+    latestCandleAgeHours,
+    staleThresholdHours,
     ageDays,
     liquidity,
     volume24h,
@@ -225,11 +268,19 @@ function chooseLevels(candles, currentPrice, atr) {
   };
 }
 
-export function buildDcaPlan({ rawCandles, candles: suppliedCandles, market = {}, capital = 500, targetPct = 50 }) {
+export function buildDcaPlan({
+  rawCandles,
+  candles: suppliedCandles,
+  market = {},
+  capital = 500,
+  targetPct = 50,
+  expectedIntervalSeconds,
+  dataAsOf,
+}) {
   const candles = normalizeCandles(suppliedCandles || rawCandles || []);
-  const budget = clamp(Number(capital) || 500, 1, 10_000_000);
+  const budget = Math.round(clamp(Number(capital) || 500, 1, 10_000_000) * 100) / 100;
   const gainTarget = clamp(Number(targetPct) || 50, 5, 500);
-  const quality = assessMarketData(market, candles);
+  const quality = assessMarketData(market, candles, { expectedIntervalSeconds, dataAsOf });
 
   if (!quality.canPlan) {
     return {
@@ -245,24 +296,33 @@ export function buildDcaPlan({ rawCandles, candles: suppliedCandles, market = {}
   }
 
   const { levels, structuralCount } = chooseLevels(candles, quality.currentPrice, quality.atr);
-  const hasStructuralHistory = quality.historyDays >= 7;
+  const hasStructuralHistory = quality.candleCount >= MIN_STRUCTURAL_CANDLES && quality.historyDays >= 7;
   const mode = structuralCount >= 2 && hasStructuralHistory ? "adaptive" : "volatility-reference";
+  const referenceWarning = structuralCount < 2
+    ? "Fewer than two repeated support zones were found. Treat this as a volatility-reference ladder, not a structural setup."
+    : quality.candleCount < MIN_STRUCTURAL_CANDLES
+      ? "Fewer than 30 candles are available. Treat repeated levels as sample-limited volatility references, not structural support."
+      : "The selected interval covers less than seven days. Treat its repeated levels as short-window volatility references, not structural support.";
   const planQuality = mode === "adaptive"
     ? quality
     : {
         ...quality,
-        warnings: [
-          ...quality.warnings,
-          structuralCount < 2
-            ? "Fewer than two repeated support zones were found. Treat this as a volatility-reference ladder, not a structural setup."
-            : "The selected interval covers less than seven days. Treat its repeated levels as short-window volatility references, not structural support.",
-        ],
+        warnings: quality.candleCount < MIN_STRUCTURAL_CANDLES
+          ? quality.warnings
+          : [...new Set([...quality.warnings, referenceWarning])],
       };
+  const allocatedAmounts = allocateBudgetByPercent(budget, DEFAULT_ALLOCATIONS);
   const legs = levels.map((level, index) => {
     const allocationPct = DEFAULT_ALLOCATIONS[index];
-    const amountUsd = budget * (allocationPct / 100);
-    const zoneWidth = Math.min(level.price * 0.06, Math.max(level.price * 0.012, quality.atr * 0.18));
+    const amountUsd = allocatedAmounts[index];
     const midpoint = level.price;
+    const adjacentGaps = [
+      index > 0 ? levels[index - 1].price - midpoint : null,
+      index < levels.length - 1 ? midpoint - levels[index + 1].price : null,
+    ].filter(gap => Number.isFinite(gap) && gap > 0);
+    const nominalWidth = Math.min(midpoint * 0.06, Math.max(midpoint * 0.012, quality.atr * 0.18));
+    const separationWidth = adjacentGaps.length ? Math.min(...adjacentGaps) * 0.38 : nominalWidth;
+    const zoneWidth = Math.min(nominalWidth, separationWidth);
 
     return {
       id: `B${index + 1}`,
@@ -284,7 +344,9 @@ export function buildDcaPlan({ rawCandles, candles: suppliedCandles, market = {}
       amountUsd,
       tokenAmount: amountUsd / midpoint,
       drawdownPct: ((midpoint / quality.currentPrice) - 1) * 100,
-      rationale: level.source,
+      rationale: mode === "volatility-reference" && level.structural
+        ? "Sample-limited repeated-low reference"
+        : level.source,
       supportTouches: level.touches,
     };
   });

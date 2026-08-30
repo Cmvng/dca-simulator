@@ -15,11 +15,13 @@ A crypto DCA **decision engine** with two product modes:
 - Automatic network discovery and deterministic highest-liquidity pool selection, with volume as a tiebreaker.
 - A pool/network selector for alternative exact matches.
 - Pool-specific USD OHLCV at 5-minute, 15-minute, 1-hour, 4-hour, and daily intervals.
-- TradingView Lightweight Charts candlesticks, volume, DCA zone midlines, weighted entry, goal, and structural invalidation or scenario-floor lines.
+- TradingView Lightweight Charts candlesticks and volume with shaded `B1`–`B4` buy bands, a weighted-entry reference, `S1` goal marker, and structural invalidation or scenario-floor line.
 - Four deterministic DCA zones derived from historical swing-low evidence where available and clearly labelled ATR spacing otherwise.
-- Blocking gates for price, candle count/duration, liquidity, and extreme quote/candle divergence; volume, age, and volatility contribute warnings and confidence scoring.
+- A chart-adjacent execution map with allocation, price range, trigger order, review window, and an explicit reminder that price triggers may never fill.
+- Blocking gates for price, candle count/duration, interval density, candle freshness, liquidity, and extreme quote/candle divergence; volume, age, and volatility contribute warnings and confidence scoring.
 - Adjustable budget and goal. Budget changes allocations and quantities, never the market-derived levels.
-- Request cancellation, bounded upstream timeouts, normalized errors, edge/server caching, and readable rate-limit states.
+- Chart-first mobile layout with all six market metrics visible in a compact grid before plan controls.
+- Request IDs plus cancellation prevent stale responses, while address/pool/interval URL state makes an analysis refreshable and shareable.
 
 ### Top 250 decision engine
 
@@ -70,11 +72,12 @@ The contract flow is deterministic:
 2. The strongest active pool is selected by liquidity, then volume; alternatives remain user-selectable.
 3. `/api/candles` verifies that exact token belongs to the selected pool and returns validated chronological OHLCV.
 4. The local engine either blocks weak data or calculates four descending scenario zones.
-5. The chart draws only historical candles and horizontal scenario levels. It never draws fabricated future candles.
+5. The chart draws only historical candles plus shaded buy bands and horizontal scenario references. It never draws fabricated future candles or a predicted price path.
+6. `B1` through `B4` identify descending conditional buys; `S1` is the selected goal above simulated weighted average entry, not a promise or automatic order.
 
 ## What “supported” means
 
-A token is supported only when GeckoTerminal indexes an exact matching active pool, returns a positive USD price and liquidity, confirms the token in the selected pool's OHLCV metadata, and supplies enough valid history. Any ladder requires at least 30 valid candles spanning 24 hours, at least $10,000 reported pool liquidity, and no extreme live/candle divergence. Support-based mode additionally requires at least seven elapsed days and two repeated support zones; otherwise the result is labelled a volatility-reference ladder.
+A token is supported only when GeckoTerminal indexes an exact matching active pool, returns a positive USD price and liquidity, confirms the token in the selected pool's OHLCV metadata, and supplies enough valid history. A conservative volatility-reference ladder requires at least 20 valid candles spanning 24 hours, reasonable coverage for the requested interval, a fresh latest candle, at least $10,000 reported pool liquidity, and no extreme live/candle divergence. Adaptive structural mode additionally requires at least 30 candles, seven elapsed days, and two repeated support zones. Anything that passes the base gate without all three structural requirements remains explicitly labelled a volatility-reference ladder.
 
 This is deliberately narrower than “every memecoin.” A token can be unsupported because its network is not indexed, it is still on a bonding curve, no active pool exists, the public search does not return the pool, or history is too weak. Those cases produce an error or blocking state instead of invented levels.
 
@@ -86,7 +89,7 @@ The keyless GeckoTerminal API is beta and rate-limited. Its newer [keyless API g
 
 One scan normally uses one pool-search request and one candle request. Search and OHLCV responses are cached; a paid CoinGecko Onchain tier or stronger shared caching is the natural production upgrade if usage outgrows the public allowance.
 
-The chart's `MAX` button means the provider's maximum single-request window, not all-time history. GeckoTerminal documents a maximum of roughly six months per OHLCV call; the UI shows the actual elapsed history returned.
+The chart exposes candle resolutions from 5 minutes through 1 day. The former `MAX` control was removed because it issued the same daily request as `1D` and implied a distinct all-time range that the provider does not supply. The UI reports the actual elapsed history returned.
 
 ## Safety limitations
 
@@ -95,7 +98,7 @@ The chart's `MAX` button means the provider's maximum single-request window, not
 - Reported liquidity and volume can be manipulated, fragmented, removed, or stale.
 - No executable round-trip quote is requested yet, so displayed plans exclude real routing, price impact, taxes, gas, and slippage.
 - ATR fallback levels are volatility references, not detected support or forecasts.
-- Goal and invalidation lines are references, not guaranteed fills. A memecoin can become unsellable or lose 100%.
+- `B1`–`B4`, `S1`, goal, and invalidation levels are conditional references, not guaranteed fills or executable orders. The review window is a prompt to reassess stale assumptions, not a forecast horizon. A memecoin can become unsellable or lose 100%.
 
 GoPlus or another independent security provider, plus size-aware buy-and-sell quotes, should be added before presenting this as a launch-ready security screen.
 
