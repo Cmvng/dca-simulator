@@ -1,0 +1,1218 @@
+import React, {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+} from "react";
+import {
+  CandlestickSeries,
+  ColorType,
+  CrosshairMode,
+  createChart,
+  HistogramSeries,
+  LineSeries,
+  LineStyle,
+  TrackingModeExitMode,
+} from "lightweight-charts";
+import { SANS, T } from "../styles/theme.js";
+
+const COLORS = {
+  background: "#070A12",
+  surface: "#101522",
+  border: "#222A3B",
+  grid: "rgba(139, 147, 167, 0.10)",
+  text: "#F6F8FC",
+  muted: "#8B93A7",
+  positive: T.gain,
+  negative: T.loss,
+  dca: T.blue,
+  average: "#D6DEEC",
+  target: T.blue,
+  invalidation: T.loss,
+};
+
+const PRICE_KEYS = [
+  "price",
+  "midpoint",
+  "entryPrice",
+  "triggerPrice",
+  "level",
+  "midPrice",
+];
+const LEG_KEYS = ["legs", "entries", "dcaLegs", "levels", "buyZones", "zones"];
+const MAX_PRICE_DECIMALS = 18;
+const MAX_ACCESSIBLE_CANDLES = 50;
+
+function asFiniteNumber(value) {
+  if (value && typeof value === "object") {
+    return asFiniteNumber(
+      value.price ?? value.value ?? value.mid ?? value.midPrice ?? value.triggerPrice
+    );
+  }
+
+  const number = typeof value === "string" ? Number(value.trim()) : Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function firstFinite(...values) {
+  for (const value of values) {
+    const number = asFiniteNumber(value);
+    if (number !== null) return number;
+  }
+  return null;
+}
+
+function normalizeTime(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    // GeckoTerminal and Lightweight Charts use seconds, while some adapters expose ms.
+    return Math.floor(value > 100_000_000_000 ? value / 1000 : value);
+  }
+
+  if (typeof value === "string") {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return normalizeTime(numeric);
+
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return Math.floor(parsed / 1000);
+  }
+
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return Math.floor(value.getTime() / 1000);
+  }
+
+  return null;
+}
+
+function normalizeCandle(raw) {
+  const isTuple = Array.isArray(raw);
+  const time = normalizeTime(isTuple ? raw[0] : raw?.time ?? raw?.timestamp ?? raw?.date);
+  const open = asFiniteNumber(isTuple ? raw[1] : raw?.open ?? raw?.o);
+  const high = asFiniteNumber(isTuple ? raw[2] : raw?.high ?? raw?.h);
+  const low = asFiniteNumber(isTuple ? raw[3] : raw?.low ?? raw?.l);
+  const close = asFiniteNumber(isTuple ? raw[4] : raw?.close ?? raw?.c);
+  const volume = asFiniteNumber(
+    isTuple ? raw[5] : raw?.volume ?? raw?.v ?? raw?.baseVolume ?? 0
+  );
+
+  if (
+    time === null ||
+    open === null ||
+    high === null ||
+    low === null ||
+    close === null ||
+    open <= 0 ||
+    high <= 0 ||
+    low <= 0 ||
+    close <= 0 ||
+    high < low ||
+    high < Math.max(open, close) ||
+    low > Math.min(open, close)
+  ) {
+    return null;
+  }
+
+  return {
+    time,
+    open,
+    high,
+    low,
+    close,
+    volume: volume !== null && volume > 0 ? volume : 0,
+  };
+}
+
+function normalizeCandles(candles) {
+  if (!Array.isArray(candles)) return [];
+
+  // Last item wins when an API includes a still-forming candle twice.
+  const byTime = new Map();
+  for (const raw of candles) {
+    const candle = normalizeCandle(raw);
+    if (candle) byTime.set(candle.time, candle);
+  }
+
+  return [...byTime.values()].sort((a, b) => a.time - b.time);
+}
+
+function legPrice(leg) {
+  for (const key of PRICE_KEYS) {
+    const value = asFiniteNumber(leg?.[key]);
+    if (value !== null && value > 0) return value;
+  }
+
+  const range = Array.isArray(leg?.range) ? leg.range : null;
+  const low = firstFinite(
+    leg?.zoneLow,
+    leg?.lowPrice,
+    leg?.lowerPrice,
+    leg?.lower,
+    leg?.minPrice,
+    leg?.zone?.low,
+    range?.[0]
+  );
+  const high = firstFinite(
+    leg?.zoneHigh,
+    leg?.highPrice,
+    leg?.upperPrice,
+    leg?.upper,
+    leg?.maxPrice,
+    leg?.zone?.high,
+    range?.[1]
+  );
+
+  if (low !== null && high !== null && low > 0 && high > 0) {
+    return (low + high) / 2;
+  }
+  return low > 0 ? low : high > 0 ? high : null;
+}
+
+function normalizePlan(plan) {
+  const source = plan && typeof plan === "object" ? plan : {};
+  let rawLegs = Array.isArray(plan) ? plan : null;
+
+  if (!rawLegs) {
+    for (const key of LEG_KEYS) {
+      if (Array.isArray(source[key])) {
+        rawLegs = source[key];
+        break;
+      }
+    }
+  }
+
+  const legs = (rawLegs || []).flatMap((leg, index) => {
+    const price = legPrice(leg);
+    if (!(price > 0)) return [];
+
+    const explicitPercent = firstFinite(
+      leg?.allocationPct,
+      leg?.allocationPercent,
+      leg?.percentage,
+      leg?.percent
+    );
+    const fraction = firstFinite(leg?.weight, leg?.allocationFraction);
+    const allocationPct =
+      explicitPercent !== null
+        ? explicitPercent
+        : fraction !== null
+          ? fraction <= 1
+            ? fraction * 100
+            : fraction
+          : null;
+
+    return [
+      {
+        id: String(leg?.id ?? `leg-${index + 1}`),
+        label: String(leg?.label ?? leg?.name ?? `DCA ${index + 1}`),
+        price,
+        allocationPct,
+        amount: firstFinite(
+          leg?.amount,
+          leg?.amountUsd,
+          leg?.cashAmount,
+          leg?.allocationAmount,
+          leg?.capital
+        ),
+      },
+    ];
+  });
+
+  const suppliedAverage = firstFinite(
+    source.weightedAverage,
+    source.weightedAverageEntry,
+    source.weightedAveragePrice,
+    source.weightedAvgEntry,
+    source.averageEntry,
+    source.avgEntry,
+    source.summary?.weightedAverage,
+    source.summary?.averageEntry
+  );
+
+  // Equal or percentage-based dollar allocations produce a harmonic price average.
+  const weightedAverage =
+    suppliedAverage > 0
+      ? suppliedAverage
+      : legs.length
+        ? (() => {
+            const weights = legs.map((leg) =>
+              leg.amount > 0 ? leg.amount : leg.allocationPct > 0 ? leg.allocationPct : 1
+            );
+            const totalCash = weights.reduce((sum, weight) => sum + weight, 0);
+            const totalTokens = legs.reduce(
+              (sum, leg, index) => sum + weights[index] / leg.price,
+              0
+            );
+            return totalTokens > 0 ? totalCash / totalTokens : null;
+          })()
+        : null;
+
+  const firstTarget = Array.isArray(source.targets) ? source.targets[0] : null;
+
+  return {
+    legs,
+    mode: source.mode || "adaptive",
+    currentPrice: firstFinite(
+      source.currentPrice,
+      source.livePrice,
+      source.refPrice,
+      source.quality?.currentPrice,
+      source.market?.price
+    ),
+    weightedAverage,
+    target: firstFinite(
+      source.targetPrice,
+      source.target,
+      source.takeProfitPrice,
+      source.takeProfit,
+      firstTarget,
+      source.summary?.targetPrice
+    ),
+    invalidation: firstFinite(
+      source.invalidationPrice,
+      source.invalidation,
+      source.stopPrice,
+      source.stopLoss,
+      source.risk?.invalidationPrice
+    ),
+  };
+}
+
+function precisionFor(candles, levels) {
+  const positives = [
+    ...candles.flatMap((candle) => [candle.open, candle.high, candle.low, candle.close]),
+    ...levels,
+  ].filter((value) => Number.isFinite(value) && value > 0);
+
+  if (!positives.length) return 8;
+  const smallest = Math.min(...positives);
+  if (smallest >= 100) return 2;
+  if (smallest >= 1) return 4;
+
+  return Math.min(
+    MAX_PRICE_DECIMALS,
+    Math.max(4, Math.ceil(-Math.log10(smallest)) + 4)
+  );
+}
+
+function formatPrice(value) {
+  if (!Number.isFinite(value)) return "—";
+  const sign = value < 0 ? "−" : "";
+  const absolute = Math.abs(value);
+  if (absolute === 0) return "$0";
+
+  if (absolute >= 1_000_000) {
+    return `${sign}$${new Intl.NumberFormat("en-US", {
+      notation: "compact",
+      maximumFractionDigits: 2,
+    }).format(absolute)}`;
+  }
+
+  if (absolute >= 1) {
+    return `${sign}$${new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: absolute >= 1000 ? 2 : 4,
+    }).format(absolute)}`;
+  }
+
+  if (absolute < 1e-8) return `${sign}$${absolute.toExponential(4)}`;
+
+  const decimals = Math.min(12, Math.max(4, Math.ceil(-Math.log10(absolute)) + 4));
+  return `${sign}$${absolute.toLocaleString("en-US", {
+    useGrouping: false,
+    maximumFractionDigits: decimals,
+  })}`;
+}
+
+function formatVolume(value) {
+  if (!Number.isFinite(value) || value <= 0) return "—";
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function formatTime(time, withTime = true) {
+  const date = new Date(Number(time) * 1000);
+  if (!Number.isFinite(date.getTime())) return "Unknown time";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    ...(withTime
+      ? { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC" }
+      : {}),
+  }).format(date);
+}
+
+function messageFromError(error) {
+  if (!error) return "";
+  if (typeof error === "string") return error;
+  if (typeof error?.message === "string") return error.message;
+  return "The chart could not be loaded.";
+}
+
+const COMPONENT_CSS = `
+  .cmvng-dca-chart {
+    color: ${COLORS.text};
+    background: ${COLORS.background};
+    border: 1px solid ${COLORS.border};
+    border-radius: 22px;
+    box-shadow: 0 22px 70px rgba(0, 0, 0, 0.28);
+    font-family: ${SANS};
+    overflow: hidden;
+    position: relative;
+  }
+  .cmvng-dca-chart * { box-sizing: border-box; }
+  .cmvng-dca-chart__head {
+    align-items: center;
+    display: flex;
+    gap: 14px;
+    justify-content: space-between;
+    min-height: 72px;
+    padding: 14px 16px 10px;
+  }
+  .cmvng-dca-chart__identity { min-width: 0; }
+  .cmvng-dca-chart__eyebrow {
+    color: ${COLORS.muted};
+    display: block;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    margin-bottom: 3px;
+    text-transform: uppercase;
+  }
+  .cmvng-dca-chart__symbol {
+    font-size: clamp(16px, 3.6vw, 20px);
+    font-weight: 700;
+    letter-spacing: -.02em;
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cmvng-dca-chart__quote { text-align: right; }
+  .cmvng-dca-chart__price {
+    display: block;
+    font-size: clamp(18px, 4vw, 24px);
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    letter-spacing: -.035em;
+    white-space: nowrap;
+  }
+  .cmvng-dca-chart__source {
+    align-items: center;
+    color: ${COLORS.muted};
+    display: inline-flex;
+    font-size: 11px;
+    gap: 6px;
+    margin-top: 2px;
+  }
+  .cmvng-dca-chart__source-dot {
+    background: ${COLORS.dca};
+    border-radius: 50%;
+    box-shadow: 0 0 0 3px rgba(46, 107, 240, .16);
+    height: 6px;
+    width: 6px;
+  }
+  .cmvng-dca-chart__stage {
+    background: ${COLORS.background};
+    height: clamp(330px, 48vh, 560px);
+    min-height: 330px;
+    position: relative;
+  }
+  .cmvng-dca-chart__canvas { height: 100%; width: 100%; }
+  .cmvng-dca-chart__tooltip {
+    background: rgba(16, 21, 34, .88);
+    border: 1px solid rgba(139, 147, 167, .16);
+    border-radius: 9px;
+    color: #C9CFDB;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    left: 12px;
+    line-height: 1.45;
+    max-width: calc(100% - 98px);
+    overflow: hidden;
+    padding: 6px 8px;
+    pointer-events: none;
+    position: absolute;
+    text-overflow: ellipsis;
+    top: 8px;
+    white-space: nowrap;
+    z-index: 4;
+  }
+  .cmvng-dca-chart__reset {
+    align-items: center;
+    background: rgba(16, 21, 34, .90);
+    border: 1px solid rgba(139, 147, 167, .24);
+    border-radius: 10px;
+    color: #DCE1EB;
+    cursor: pointer;
+    display: inline-flex;
+    font: 700 11px/1 ${SANS};
+    gap: 6px;
+    min-height: 44px;
+    padding: 0 11px;
+    position: absolute;
+    right: 10px;
+    top: 8px;
+    transition: background-color .16s ease, border-color .16s ease, transform .16s ease;
+    z-index: 5;
+  }
+  .cmvng-dca-chart__reset:hover {
+    background: #171D2C;
+    border-color: rgba(46, 107, 240, .65);
+  }
+  .cmvng-dca-chart__reset:active { transform: scale(.97); }
+  .cmvng-dca-chart__reset:focus-visible {
+    outline: 3px solid rgba(46, 107, 240, .55);
+    outline-offset: 2px;
+  }
+  .cmvng-dca-chart__state {
+    align-items: center;
+    background: rgba(7, 10, 18, .88);
+    display: flex;
+    inset: 0;
+    justify-content: center;
+    padding: 32px;
+    position: absolute;
+    text-align: center;
+    z-index: 6;
+  }
+  .cmvng-dca-chart__state-card { max-width: 360px; }
+  .cmvng-dca-chart__state-title {
+    color: ${COLORS.text};
+    font-size: 15px;
+    font-weight: 700;
+    margin: 0 0 6px;
+  }
+  .cmvng-dca-chart__state-copy {
+    color: ${COLORS.muted};
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 0;
+  }
+  .cmvng-dca-chart__loader {
+    border: 2px solid rgba(46, 107, 240, .32);
+    border-radius: 50%;
+    border-top-color: ${COLORS.average};
+    height: 28px;
+    margin: 0 auto 12px;
+    width: 28px;
+  }
+  .cmvng-dca-chart__legend {
+    align-items: center;
+    border-top: 1px solid rgba(34, 42, 59, .75);
+    display: flex;
+    gap: 8px;
+    min-height: 47px;
+    overflow-x: auto;
+    padding: 8px 12px;
+    scrollbar-width: none;
+  }
+  .cmvng-dca-chart__legend::-webkit-scrollbar { display: none; }
+  .cmvng-dca-chart__key {
+    align-items: center;
+    background: rgba(16, 21, 34, .78);
+    border: 1px solid rgba(139, 147, 167, .13);
+    border-radius: 999px;
+    color: #AEB6C7;
+    display: inline-flex;
+    flex: 0 0 auto;
+    font-size: 10px;
+    font-weight: 700;
+    gap: 6px;
+    letter-spacing: .02em;
+    padding: 6px 8px;
+  }
+  .cmvng-dca-chart__key-line {
+    border-top: 2px solid var(--key-color);
+    display: inline-block;
+    width: 13px;
+  }
+  .cmvng-dca-chart__key-line--dashed { border-top-style: dashed; }
+  .cmvng-dca-chart__key-line--dotted { border-top-style: dotted; }
+  .cmvng-dca-chart__attribution {
+    align-items: center;
+    border-top: 1px solid rgba(34, 42, 59, .48);
+    color: #8B93A7;
+    display: flex;
+    font-size: 9px;
+    justify-content: space-between;
+    line-height: 1.4;
+    padding: 6px 12px 7px;
+  }
+  .cmvng-dca-chart__attribution a { color: #AEB6C7; text-decoration: none; }
+  .cmvng-dca-chart__attribution a:hover { color: #B5BDCB; text-decoration: underline; }
+  .cmvng-dca-chart__sr-only {
+    border: 0 !important;
+    clip: rect(0 0 0 0) !important;
+    clip-path: inset(50%) !important;
+    height: 1px !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    padding: 0 !important;
+    position: absolute !important;
+    white-space: nowrap !important;
+    width: 1px !important;
+  }
+  @media (max-width: 540px) {
+    .cmvng-dca-chart { border-radius: 18px; }
+    .cmvng-dca-chart__head { min-height: 67px; padding-inline: 13px; }
+    .cmvng-dca-chart__stage { height: clamp(330px, 46vh, 470px); }
+    .cmvng-dca-chart__tooltip { left: 8px; max-width: calc(100% - 62px); white-space: normal; }
+    .cmvng-dca-chart__reset { min-height: 44px; padding: 0 9px; right: 8px; }
+    .cmvng-dca-chart__reset span { display: none; }
+    .cmvng-dca-chart__attribution { align-items: flex-start; flex-direction: column; gap: 2px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cmvng-dca-chart__reset { transition: none; }
+  }
+`;
+
+/**
+ * Dark, responsive OHLCV chart for the contract-address DCA experience.
+ *
+ * Expected normalized inputs:
+ * - candles: [{ time|timestamp, open, high, low, close, volume }]
+ * - plan: { legs: [{ price, allocationPct }], weightedAverage, target, invalidation }
+ *
+ * Common aliases and GeckoTerminal OHLCV tuples are accepted defensively, but provider
+ * response normalization should still live in the API/client layer.
+ */
+export default function DcaChart({
+  candles = [],
+  plan = null,
+  tokenSymbol,
+  symbol,
+  loading = false,
+  error = null,
+}) {
+  const reactId = useId();
+  const summaryId = `cmvng-chart-summary-${reactId.replace(/:/g, "")}`;
+  const chartContainerRef = useRef(null);
+  const tooltipRef = useRef(null);
+  const chartRef = useRef(null);
+  const candleSeriesRef = useRef(null);
+  const volumeSeriesRef = useRef(null);
+  const autoscaleSeriesRef = useRef(null);
+  const priceLinesRef = useRef(new Map());
+  const formatterRef = useRef(formatPrice);
+  const latestCandleRef = useRef(null);
+  const crosshairActiveRef = useRef(false);
+  const previousDatasetRef = useRef(null);
+
+  const displaySymbol = String(tokenSymbol || symbol || "TOKEN").toUpperCase();
+  const normalizedCandles = useMemo(() => normalizeCandles(candles), [candles]);
+  const accessibleCandles = useMemo(
+    () => normalizedCandles.slice(-MAX_ACCESSIBLE_CANDLES),
+    [normalizedCandles],
+  );
+  const normalizedPlan = useMemo(() => normalizePlan(plan), [plan]);
+  const latestCandle = normalizedCandles.at(-1) || null;
+  const currentPrice =
+    normalizedPlan.currentPrice > 0 ? normalizedPlan.currentPrice : latestCandle?.close ?? null;
+
+  const numericLevels = useMemo(
+    () =>
+      [
+        currentPrice,
+        ...normalizedPlan.legs.map((leg) => leg.price),
+        normalizedPlan.weightedAverage,
+        normalizedPlan.target,
+        normalizedPlan.invalidation,
+      ].filter((value) => value > 0),
+    [currentPrice, normalizedPlan]
+  );
+
+  const decimals = useMemo(
+    () => precisionFor(normalizedCandles, numericLevels),
+    [normalizedCandles, numericLevels]
+  );
+
+  const chartPriceFormatter = useCallback(
+    (value) => {
+      if (!Number.isFinite(value)) return "—";
+      const absolute = Math.abs(value);
+      if (absolute !== 0 && absolute < 1e-8) return `$${value.toExponential(3)}`;
+      if (absolute >= 1) return formatPrice(value);
+      return `$${value.toLocaleString("en-US", {
+        useGrouping: false,
+        maximumFractionDigits: decimals,
+      })}`;
+    },
+    [decimals]
+  );
+
+  const desiredLines = useMemo(() => {
+    const lines = [];
+
+    if (currentPrice > 0) {
+      lines.push({
+        key: "current",
+        type: "Current price",
+        price: currentPrice,
+        allocation: null,
+        options: {
+          id: "cmvng-current-price",
+          price: currentPrice,
+          color: COLORS.average,
+          lineWidth: 2,
+          lineStyle: LineStyle.Solid,
+          axisLabelVisible: true,
+          title: "CURRENT",
+        },
+      });
+    }
+
+    normalizedPlan.legs.forEach((leg, index) => {
+      const allocationLabel =
+        leg.allocationPct !== null ? ` ${leg.allocationPct.toFixed(0)}%` : "";
+      lines.push({
+        key: `dca-${leg.id}-${index}`,
+        type: leg.label,
+        price: leg.price,
+        allocation: leg.allocationPct,
+        options: {
+          id: `cmvng-dca-${index + 1}`,
+          price: leg.price,
+          color: COLORS.dca,
+          lineWidth: 2,
+          lineStyle: LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: `${normalizedPlan.mode === "volatility-reference" ? `REF ${index + 1}` : leg.label}${allocationLabel}`,
+        },
+      });
+    });
+
+    if (normalizedPlan.weightedAverage > 0) {
+      lines.push({
+        key: "weighted-average",
+        type: "Weighted average entry",
+        price: normalizedPlan.weightedAverage,
+        allocation: null,
+        options: {
+          id: "cmvng-weighted-average",
+          price: normalizedPlan.weightedAverage,
+          color: COLORS.average,
+          lineWidth: 2,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "AVG ENTRY",
+        },
+      });
+    }
+
+    if (normalizedPlan.target > 0) {
+      lines.push({
+        key: "target",
+        type: "Target",
+        price: normalizedPlan.target,
+        allocation: null,
+        options: {
+          id: "cmvng-target",
+          price: normalizedPlan.target,
+          color: COLORS.target,
+          lineWidth: 2,
+          lineStyle: LineStyle.LargeDashed,
+          axisLabelVisible: true,
+          title: "TARGET",
+        },
+      });
+    }
+
+    if (normalizedPlan.invalidation > 0) {
+      const isReference = normalizedPlan.mode === "volatility-reference";
+      lines.push({
+        key: "invalidation",
+        type: isReference ? "Scenario floor" : "Invalidation",
+        price: normalizedPlan.invalidation,
+        allocation: null,
+        options: {
+          id: "cmvng-invalidation",
+          price: normalizedPlan.invalidation,
+          color: COLORS.invalidation,
+          lineWidth: 2,
+          lineStyle: LineStyle.SparseDotted,
+          axisLabelVisible: true,
+          title: isReference ? "FLOOR" : "INVALID",
+        },
+      });
+    }
+
+    return lines;
+  }, [currentPrice, normalizedPlan]);
+
+  const updateTooltip = useCallback((candle) => {
+    if (!tooltipRef.current || !candle) return;
+    tooltipRef.current.textContent = `${formatTime(candle.time)}  O ${formatterRef.current(
+      candle.open
+    )}  H ${formatterRef.current(candle.high)}  L ${formatterRef.current(
+      candle.low
+    )}  C ${formatterRef.current(candle.close)}  V ${formatVolume(candle.volume)}`;
+  }, []);
+
+  const fitChart = useCallback(() => {
+    const chart = chartRef.current;
+    const series = candleSeriesRef.current;
+    if (!chart || !series) return;
+    series.priceScale().setAutoScale(true);
+    chart.timeScale().fitContent();
+  }, []);
+
+  useEffect(() => {
+    if (!chartContainerRef.current) return undefined;
+
+    const priceLines = priceLinesRef.current;
+
+    const chart = createChart(chartContainerRef.current, {
+      autoSize: true,
+      layout: {
+        background: { type: ColorType.Solid, color: COLORS.background },
+        textColor: COLORS.muted,
+        fontSize: 11,
+        fontFamily: SANS,
+        attributionLogo: false,
+        panes: {
+          enableResize: false,
+          separatorColor: COLORS.border,
+          separatorHoverColor: COLORS.border,
+        },
+      },
+      grid: {
+        vertLines: { color: COLORS.grid, style: LineStyle.Dotted, visible: true },
+        horzLines: { color: COLORS.grid, style: LineStyle.Dotted, visible: true },
+      },
+      rightPriceScale: {
+        autoScale: true,
+        borderColor: COLORS.border,
+        borderVisible: true,
+        minimumWidth: 76,
+        scaleMargins: { top: 0.1, bottom: 0.24 },
+        textColor: COLORS.muted,
+        tickMarkDensity: 3,
+        ticksVisible: false,
+      },
+      leftPriceScale: { visible: false },
+      timeScale: {
+        barSpacing: 7,
+        borderColor: COLORS.border,
+        borderVisible: true,
+        fixLeftEdge: false,
+        fixRightEdge: false,
+        lockVisibleTimeRangeOnResize: true,
+        minBarSpacing: 1,
+        rightOffsetPixels: 20,
+        secondsVisible: false,
+        shiftVisibleRangeOnNewBar: true,
+        timeVisible: true,
+        visible: true,
+      },
+      crosshair: {
+        mode: CrosshairMode.MagnetOHLC,
+        vertLine: {
+          color: "rgba(199, 207, 222, .38)",
+          labelBackgroundColor: "#343B4D",
+          labelVisible: true,
+          style: LineStyle.Dashed,
+          visible: true,
+          width: 1,
+        },
+        horzLine: {
+          color: "rgba(199, 207, 222, .38)",
+          labelBackgroundColor: "#343B4D",
+          labelVisible: true,
+          style: LineStyle.Dashed,
+          visible: true,
+          width: 1,
+        },
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        // Preserve natural page scrolling on a mobile-first screen.
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        mouseWheel: true,
+        pinch: true,
+        axisPressedMouseMove: { time: true, price: true },
+        axisDoubleClickReset: { time: true, price: true },
+      },
+      kineticScroll: { mouse: false, touch: true },
+      trackingMode: { exitMode: TrackingModeExitMode.OnNextTap },
+    });
+
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      borderVisible: false,
+      downColor: COLORS.negative,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      upColor: COLORS.positive,
+      wickDownColor: COLORS.negative,
+      wickUpColor: COLORS.positive,
+    });
+
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      color: "rgba(139, 147, 167, .25)",
+      lastValueVisible: false,
+      priceFormat: { type: "volume" },
+      priceLineVisible: false,
+      priceScaleId: "",
+    });
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: { top: 0.82, bottom: 0 },
+    });
+
+    // Lightweight Charts excludes custom price lines from autoscale. A fully
+    // transparent line series carries the outer plan levels so Fit includes
+    // distant buy references, targets, and floors without drawing fake data.
+    const autoscaleSeries = chart.addSeries(LineSeries, {
+      color: "rgba(0, 0, 0, 0)",
+      crosshairMarkerVisible: false,
+      lastValueVisible: false,
+      lineWidth: 1,
+      priceLineVisible: false,
+    });
+
+    chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+    volumeSeriesRef.current = volumeSeries;
+    autoscaleSeriesRef.current = autoscaleSeries;
+
+    const onCrosshairMove = (param) => {
+      const candle = param.seriesData?.get(candleSeries);
+      const volume = param.seriesData?.get(volumeSeries);
+      if (!param.point || !param.time || !candle || !("open" in candle)) {
+        crosshairActiveRef.current = false;
+        updateTooltip(latestCandleRef.current);
+        return;
+      }
+
+      crosshairActiveRef.current = true;
+      updateTooltip({
+        ...candle,
+        time: param.time,
+        volume: volume && "value" in volume ? volume.value : 0,
+      });
+    };
+
+    const onDoubleClick = () => fitChart();
+    chart.subscribeCrosshairMove(onCrosshairMove);
+    chart.subscribeDblClick(onDoubleClick);
+
+    return () => {
+      chart.unsubscribeCrosshairMove(onCrosshairMove);
+      chart.unsubscribeDblClick(onDoubleClick);
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      autoscaleSeriesRef.current = null;
+      priceLines.clear();
+    };
+  }, [fitChart, updateTooltip]);
+
+  useEffect(() => {
+    const candleSeries = candleSeriesRef.current;
+    const volumeSeries = volumeSeriesRef.current;
+    if (!candleSeries || !volumeSeries) return;
+
+    formatterRef.current = chartPriceFormatter;
+    candleSeries.applyOptions({
+      priceFormat: {
+        type: "custom",
+        formatter: chartPriceFormatter,
+        minMove: 10 ** -decimals,
+        base: 10 ** decimals,
+      },
+    });
+
+    candleSeries.setData(
+      normalizedCandles.map(({ time, open, high, low, close }) => ({
+        time,
+        open,
+        high,
+        low,
+        close,
+      }))
+    );
+    volumeSeries.setData(
+      normalizedCandles.map(({ time, open, close, volume }) => ({
+        time,
+        value: volume,
+        color:
+          close >= open ? "rgba(18, 183, 106, .28)" : "rgba(240, 68, 46, .28)",
+      }))
+    );
+
+    latestCandleRef.current = latestCandle;
+    crosshairActiveRef.current = false;
+    updateTooltip(latestCandle);
+
+    const count = normalizedCandles.length;
+    const interval = count > 1 ? normalizedCandles[1].time - normalizedCandles[0].time : 0;
+    const nextDataset = {
+      symbol: displaySymbol,
+      count,
+      interval,
+      firstTime: normalizedCandles[0]?.time ?? null,
+      firstClose: normalizedCandles[0]?.close ?? null,
+    };
+    const previous = previousDatasetRef.current;
+    const priceRatio =
+      previous?.firstClose > 0 && nextDataset.firstClose > 0
+        ? nextDataset.firstClose / previous.firstClose
+        : 1;
+    const shouldFit =
+      count > 0 &&
+      (!previous ||
+        previous.count === 0 ||
+        previous.symbol !== nextDataset.symbol ||
+        previous.interval !== nextDataset.interval ||
+        Math.abs(previous.count - count) > Math.max(10, previous.count * 0.15) ||
+        priceRatio > 3 ||
+        priceRatio < 1 / 3);
+
+    previousDatasetRef.current = nextDataset;
+    if (shouldFit) requestAnimationFrame(fitChart);
+  }, [chartPriceFormatter, decimals, displaySymbol, fitChart, latestCandle, normalizedCandles, updateTooltip]);
+
+  useEffect(() => {
+    const series = autoscaleSeriesRef.current;
+    const firstTime = normalizedCandles[0]?.time;
+    const lastTime = normalizedCandles.at(-1)?.time;
+    const prices = desiredLines.map(line => line.price).filter(price => price > 0);
+    if (!series || !firstTime || !lastTime || !prices.length) {
+      series?.setData([]);
+      return;
+    }
+    const minimum = Math.min(...prices);
+    const maximum = Math.max(...prices);
+    series.setData(firstTime === lastTime || minimum === maximum
+      ? [{ time: firstTime, value: minimum }]
+      : [{ time: firstTime, value: minimum }, { time: lastTime, value: maximum }]);
+  }, [desiredLines, normalizedCandles]);
+
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+
+    const existing = priceLinesRef.current;
+    const wantedKeys = new Set(desiredLines.map((line) => line.key));
+
+    for (const [key, lineApi] of existing) {
+      if (!wantedKeys.has(key)) {
+        series.removePriceLine(lineApi);
+        existing.delete(key);
+      }
+    }
+
+    for (const line of desiredLines) {
+      const lineApi = existing.get(line.key);
+      if (lineApi) lineApi.applyOptions(line.options);
+      else existing.set(line.key, series.createPriceLine(line.options));
+    }
+  }, [desiredLines]);
+
+  const errorMessage = messageFromError(error);
+  const state = loading ? "loading" : errorMessage ? "error" : latestCandle ? "ready" : "empty";
+  const chartLabel = `${displaySymbol} candlestick chart with ${normalizedCandles.length} OHLCV candles and ${normalizedPlan.legs.length} ${normalizedPlan.mode === "volatility-reference" ? "volatility reference" : "DCA entry"} levels.`;
+
+  return (
+    <section className="cmvng-dca-chart" aria-labelledby={`${summaryId}-title`}>
+      <style>{COMPONENT_CSS}</style>
+
+      <header className="cmvng-dca-chart__head">
+        <div className="cmvng-dca-chart__identity">
+          <span className="cmvng-dca-chart__eyebrow">Real pool OHLCV</span>
+          <h2 className="cmvng-dca-chart__symbol">{displaySymbol} / USD</h2>
+        </div>
+        <div className="cmvng-dca-chart__quote">
+          <strong className="cmvng-dca-chart__price">
+            {currentPrice > 0 ? chartPriceFormatter(currentPrice) : "—"}
+          </strong>
+          <span className="cmvng-dca-chart__source">
+            {state === "ready" && <span className="cmvng-dca-chart__source-dot" />}
+            {state === "ready" ? `${normalizedCandles.length} candles` : "Waiting for data"}
+          </span>
+        </div>
+      </header>
+
+      <div
+        className="cmvng-dca-chart__stage"
+        role="group"
+        aria-label={chartLabel}
+        aria-describedby={`${summaryId}-description`}
+      >
+        <div ref={chartContainerRef} className="cmvng-dca-chart__canvas" aria-hidden="true" />
+        <div ref={tooltipRef} className="cmvng-dca-chart__tooltip" aria-hidden="true">
+          {latestCandle
+            ? `${formatTime(latestCandle.time)} · OHLCV`
+            : "Move across the chart to inspect OHLCV"}
+        </div>
+        <button
+          type="button"
+          className="cmvng-dca-chart__reset"
+          onClick={fitChart}
+          disabled={!latestCandle}
+          aria-label="Reset chart zoom and fit all candles"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M4 4v5h5M20 20v-5h-5M5.7 15.5A7 7 0 0 0 17.2 18M18.3 8.5A7 7 0 0 0 6.8 6"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span>Fit</span>
+        </button>
+
+        {state !== "ready" && (
+          <div
+            className="cmvng-dca-chart__state"
+            role={state === "error" ? "alert" : "status"}
+            aria-live={state === "error" ? undefined : "polite"}
+          >
+            <div className="cmvng-dca-chart__state-card">
+              {state === "loading" && <div className="cmvng-dca-chart__loader" />}
+              <p className="cmvng-dca-chart__state-title">
+                {state === "loading"
+                  ? "Loading real market candles"
+                  : state === "error"
+                    ? "Chart unavailable"
+                    : "No usable candles yet"}
+              </p>
+              <p className="cmvng-dca-chart__state-copy">
+                {state === "loading"
+                  ? "Resolving the pool and preparing OHLCV data."
+                  : state === "error"
+                    ? errorMessage
+                    : "This token needs an active pool and valid OHLCV history before a DCA chart can be drawn."}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="cmvng-dca-chart__legend" role="group" aria-label="Chart line legend">
+        {normalizedPlan.legs.length > 0 && (
+          <span className="cmvng-dca-chart__key">
+            <span
+              className="cmvng-dca-chart__key-line cmvng-dca-chart__key-line--dotted"
+              style={{ "--key-color": COLORS.dca }}
+            />
+            {normalizedPlan.mode === "volatility-reference" ? "Volatility references" : "DCA entries"}
+          </span>
+        )}
+        {normalizedPlan.weightedAverage > 0 && (
+          <span className="cmvng-dca-chart__key">
+            <span
+              className="cmvng-dca-chart__key-line cmvng-dca-chart__key-line--dashed"
+              style={{ "--key-color": COLORS.average }}
+            />
+            Weighted average
+          </span>
+        )}
+        {normalizedPlan.target > 0 && (
+          <span className="cmvng-dca-chart__key">
+            <span
+              className="cmvng-dca-chart__key-line cmvng-dca-chart__key-line--dashed"
+              style={{ "--key-color": COLORS.target }}
+            />
+            Target
+          </span>
+        )}
+        {normalizedPlan.invalidation > 0 && (
+          <span className="cmvng-dca-chart__key">
+            <span
+              className="cmvng-dca-chart__key-line cmvng-dca-chart__key-line--dotted"
+              style={{ "--key-color": COLORS.invalidation }}
+            />
+            {normalizedPlan.mode === "volatility-reference" ? "Scenario floor" : "Invalidation"}
+          </span>
+        )}
+        {!normalizedPlan.legs.length && (
+          <span className="cmvng-dca-chart__key">DCA levels appear after analysis</span>
+        )}
+      </div>
+
+      <footer className="cmvng-dca-chart__attribution">
+        <span>TradingView Lightweight Charts™ · Copyright © 2025 TradingView, Inc.</span>
+        <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">
+          Charts by TradingView
+        </a>
+      </footer>
+
+      <div id={summaryId} className="cmvng-dca-chart__sr-only">
+        <h3 id={`${summaryId}-title`}>{displaySymbol} accessible chart data</h3>
+        <p id={`${summaryId}-description`}>
+          This historical chart contains {normalizedCandles.length} real OHLCV candles. The current
+          pool reference is {currentPrice > 0 ? formatPrice(currentPrice) : "not available"}. It includes{" "}
+          {normalizedPlan.legs.length} potential {normalizedPlan.mode === "volatility-reference" ? "volatility reference" : "DCA entry"} levels. These levels are simulations, not
+          guaranteed entries or returns.
+        </p>
+
+        {desiredLines.length > 0 && (
+          <table>
+            <caption>DCA plan and reference levels</caption>
+            <thead>
+              <tr>
+                <th scope="col">Level</th>
+                <th scope="col">Price</th>
+                <th scope="col">Allocation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {desiredLines.map((line) => (
+                <tr key={line.key}>
+                  <th scope="row">{line.type}</th>
+                  <td>{formatPrice(line.price)}</td>
+                  <td>
+                    {line.allocation !== null ? `${line.allocation.toFixed(1)} percent` : "Not applicable"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {accessibleCandles.length > 0 && (
+          <table>
+            <caption>
+              Latest {accessibleCandles.length} of {normalizedCandles.length} OHLCV candles, oldest to newest
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">UTC time</th>
+                <th scope="col">Open</th>
+                <th scope="col">High</th>
+                <th scope="col">Low</th>
+                <th scope="col">Close</th>
+                <th scope="col">Volume</th>
+              </tr>
+            </thead>
+            <tbody>
+              {accessibleCandles.map((candle) => (
+                <tr key={candle.time}>
+                  <th scope="row">
+                    <time dateTime={new Date(candle.time * 1000).toISOString()}>
+                      {formatTime(candle.time)} UTC
+                    </time>
+                  </th>
+                  <td>{formatPrice(candle.open)}</td>
+                  <td>{formatPrice(candle.high)}</td>
+                  <td>{formatPrice(candle.low)}</td>
+                  <td>{formatPrice(candle.close)}</td>
+                  <td>{candle.volume.toLocaleString("en-US")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
+  );
+}

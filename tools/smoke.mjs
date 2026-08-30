@@ -2,6 +2,8 @@
 import { chromium } from "playwright-core";
 
 const BASE = "http://localhost:4173";
+const CHROME = process.env.CHROME_PATH || "/opt/pw-browsers/chromium-1194/chrome-linux/chrome";
+const SCREENSHOT_DIR = process.env.SCRATCH || "/tmp";
 
 // deterministic fixtures
 function makePrices(days = 365) {
@@ -18,7 +20,7 @@ const COINS = [
   { id: "solana", symbol: "sol", name: "Solana", image: null, current_price: 150, price_change_percentage_24h: 6.2, market_cap_rank: 5, market_cap: 7e10 },
 ];
 
-const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome" });
+const browser = await chromium.launch({ executablePath: CHROME });
 const errors = [];
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 const page = await ctx.newPage();
@@ -91,7 +93,7 @@ await step("purchase timeline opens", async () => {
   await page.waitForSelector("table", { timeout: 5000 });
 });
 
-await page.screenshot({ path: process.env.SCRATCH + "/desktop-results.png", fullPage: false });
+await page.screenshot({ path: SCREENSHOT_DIR + "/desktop-results.png", fullPage: false });
 
 await step("backtest mode runs", async () => {
   await page.click('button:has-text("Historical backtest")');
@@ -99,7 +101,7 @@ await step("backtest mode runs", async () => {
   await page.waitForFunction(() => document.body.innerText.toLowerCase().includes("what actually happened"), { timeout: 15000 });
 });
 
-await page.screenshot({ path: process.env.SCRATCH + "/desktop-backtest.png" });
+await page.screenshot({ path: SCREENSHOT_DIR + "/desktop-backtest.png" });
 
 // mobile pass
 await step("mobile 320px: no horizontal scroll, results legible", async () => {
@@ -110,7 +112,7 @@ await step("mobile 320px: no horizontal scroll, results legible", async () => {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   if (overflow > 2) throw new Error(`horizontal overflow ${overflow}px at 320px`);
 });
-await page.screenshot({ path: process.env.SCRATCH + "/mobile-320.png" });
+await page.screenshot({ path: SCREENSHOT_DIR + "/mobile-320.png" });
 
 await step("mobile 390px: no horizontal scroll", async () => {
   await page.setViewportSize({ width: 390, height: 844 });
