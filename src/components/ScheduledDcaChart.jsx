@@ -21,6 +21,8 @@ const VALUE_MODE_LABELS = {
 };
 const MAX_VISUAL_BUY_MARKERS = 48;
 const MAX_ACCESSIBLE_BUYS = 100;
+const PRICE_FORMAT_BASE = 1e18;
+const PRICE_FORMAT_MIN_MOVE = 1 / PRICE_FORMAT_BASE;
 
 const COLORS = {
   background: "#060914",
@@ -638,7 +640,15 @@ export default function ScheduledDcaChart({
     const reviewSeries = reviewSeriesRef.current;
     if (!historySeries || !sampleSeries || !averageSeries || !targetSeries || !reviewSeries) return;
 
-    const priceFormat = { type: "custom", minMove: 0.000000000000000001, formatter };
+    // Lightweight Charts derives `base` as 1 / minMove when it is omitted.
+    // At 1e-18 that reciprocal is rounded by JavaScript to a non-decimal base,
+    // which makes the price-scale tick calculator throw "unexpected base".
+    const priceFormat = {
+      type: "custom",
+      minMove: PRICE_FORMAT_MIN_MOVE,
+      base: PRICE_FORMAT_BASE,
+      formatter,
+    };
     historySeries.applyOptions({ priceFormat });
     sampleSeries.applyOptions({ priceFormat });
     averageSeries.applyOptions({ priceFormat });
