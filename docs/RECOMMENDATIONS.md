@@ -1,6 +1,6 @@
 # Recommendations
 
-Priorities use P0 (required for trustworthy launch), P1 (high-value next), and P2 (later expansion).
+Priorities use P0 (required before any trade-ready or actionable CTA), P1 (high-value next), and P2 (later expansion).
 
 ## Delivered baseline
 
@@ -20,8 +20,10 @@ Priorities use P0 (required for trustworthy launch), P1 (high-value next), and P
 - [x] Contract-token X, square, and story share cards with pool/DEX/counter provenance and `PLANNED · NOT EXECUTED` labeling.
 - [x] Full contract-plan URL state for address, pool, interval, amount, duration, profile, unit, target, and touch visibility.
 - [x] Main simulator chart annotations that distinguish modeled purchases, a conditional target crossing, and the modeled low-water point.
+- [x] Contract Plan Studio v2 shipped through PR #4 at merge commit `98254613638e5b2c919e7fb3018053a83a261ef7`; Railway deployment `abdd60fe-b704-4093-aa81-1aafdcb18e7a` reached `SUCCESS`.
+- [x] Live production acceptance passed with STONK on the exact selected Meteora pool, 26 `1D` candles, all three profiles, Price/MCAP/FDV, `B1`–`B4`/`S1`/`X1`, reload-persistent URL state, card generation, main-chart annotations, and no app-origin console errors.
 
-## P0 — launch integrity
+## P0 — before any trade-ready CTA
 
 - Add GoPlus plus an independent sell-simulation source; hard-block known honeypot, unsellable, malicious-authority, and extreme-tax results.
 - Request size-aware buy and sell quotes for the largest proposed tranche; block or split plans with severe impact.
