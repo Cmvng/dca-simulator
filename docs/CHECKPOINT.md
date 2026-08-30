@@ -3,14 +3,15 @@
 > Current working state. Update this file at the end of each implementation session.
 
 **Date:** 2026-08-30
-**Branch:** `codex/onchain-completeness-fixes` from `feat/cmvng-v2-upgrade` (Railway-tracked)
-**Feature merge:** `3e67f2f` from [PR #1](https://github.com/Cmvng/dca-simulator/pull/1)
+**Branch:** `feat/cmvng-v2-upgrade` (Railway-tracked)
+**Execution-map merge:** `ba5b621` from [PR #2](https://github.com/Cmvng/dca-simulator/pull/2)
+**Analyzer foundation:** `3e67f2f` from [PR #1](https://github.com/Cmvng/dca-simulator/pull/1)
 **Core model:** CMVNG Simulation v3.0.0, unchanged
 **New methodology:** Onchain ladder v1, isolated from the behavior-locked core model
 
 ## Outcome
 
-The contract-address milestone is merged and live on the Railway production service. This follow-up closes the short-history dead end and makes the complete conditional execution plan visible beside the main chart. The established planner remains the default at `/`; public `/plan/<id>` pages and `#p=` shares are preserved. The analyzer remains lazy-loaded only at `/contract`.
+The contract-address milestone and execution-map follow-up are merged and live on the Railway production service. The release closes the short-history dead end and makes the complete conditional execution plan visible beside the main chart. The established planner remains the default at `/`; public `/plan/<id>` pages and `#p=` shares are preserved. The analyzer remains lazy-loaded only at `/contract`.
 
 ## Delivered
 
@@ -54,11 +55,14 @@ The contract-address milestone is merged and live on the Railway production serv
 - [x] PR #1 squash-merged into `feat/cmvng-v2-upgrade` at `3e67f2f`; Railway auto-deployed the new bundle
 - [x] Live Railway `/contract`: Ethereum PEPE resolved to the exact Uniswap V2 pool, loaded 500 chronological 4-hour candles, and rendered four DCA legs, weighted entry, goal, and invalidation
 - [x] Live Railway `/`: established planner still renders and exposes the Contract navigation link
+- [x] PR #2 squash-merged into `feat/cmvng-v2-upgrade` at `ba5b621`; Railway deployment `166f7b38-2830-4aee-8f7b-e4575379e1a4` reached `SUCCESS`
+- [x] Live Railway STONK regression: the exact Meteora pool restored from the URL, 26 daily candles produced a volatility-reference plan, and the main chart rendered `B1`–`B4`, `S1`, and `X1`
+- [x] Live acceptance: five distinct timeframes, six market metrics, six execution-map actions, exact-pool/interval reload persistence, `$500.50` decimal-budget preservation, and zero app-origin console errors
 
 ## Verification blocked by this workspace
 
 - [ ] `npm run smoke`, `npm run smoke:onchain`, and `npm run e2e:plans` could not launch because the configured Chromium executable is absent from this runtime. The harnesses now accept `CHROME_PATH`; no browser assertion ran here.
-- [x] Live desktop screenshots captured for the empty analyzer and populated PEPE chart.
+- [x] Live desktop screenshots captured for the populated STONK chart and complete execution map.
 - [ ] Review the dedicated harness screenshots at 390px and 320px once Chromium is available.
 
 ## Known launch gaps
@@ -72,6 +76,6 @@ The contract-address milestone is merged and live on the Railway production serv
 
 ## Next handoff
 
-1. Re-run the populated live flow with a short-history token and verify `B1`–`B4`, `S1`, the review window, and chart-first mobile order after deployment.
-2. Run all three browser harnesses with a valid `CHROME_PATH` and inspect the 390px/320px screenshots.
-3. Treat the P0 items in `docs/RECOMMENDATIONS.md` as launch requirements, especially security and executable-quote providers before presenting the ladder as trade-ready.
+1. Run all three browser harnesses with a valid `CHROME_PATH` and inspect the 390px/320px screenshots.
+2. Treat the P0 items in `docs/RECOMMENDATIONS.md` as launch requirements, especially security and executable-quote providers before presenting the ladder as trade-ready.
+3. Add executable buy/sell quotes and contract-risk providers before enabling any trade-ready CTA.
