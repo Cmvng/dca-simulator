@@ -78,17 +78,20 @@ Public `/plan/<id>` pages, hash `#p=` shares, local plans, cards, tracking, and 
 4. `/api/candles` validates network/pool/token/timeframe parameters, asks GeckoTerminal for token-oriented OHLCV, verifies pool metadata, and returns sorted unique valid candles.
 5. On a pool or timeframe change, prior candles and plan output are cleared; aborted or stale requests cannot replace the selected context.
 6. Onchain ladder v1 either blocks weak evidence or creates four descending ranges with 15/20/25/40 percent budget allocation.
-7. The chart draws only returned historical candles and horizontal scenario references. A transparent autoscaling series ensures Fit includes distant plan levels without fabricating price data.
+7. The chart draws only returned historical candles plus shaded `B1`–`B4` conditional-buy bands, weighted entry, the `S1` goal, and invalidation. The candle series' autoscale provider merges plan extrema without adding fake or crosshair-active price series.
+8. The adjacent execution map repeats every trigger, allocation, price range, and the selected review window in text so the chart is actionable and accessible without implying future price movement.
 
 ## Onchain methodology and honesty rules
 
 - The ladder is price-triggered, not calendar DCA and not the established v3 simulator.
 - Repeated swing-low support requires at least two clustered historical touches.
-- Support-based mode also requires at least seven elapsed days in the selected chart interval.
+- A volatility-reference ladder requires at least 20 valid candles spanning at least 24 elapsed hours, reasonable interval coverage, and a fresh latest candle.
+- Support-based mode requires at least 30 valid candles, seven elapsed days in the selected chart interval, and two repeated support zones.
 - Fallbacks are labelled volatility references; they are never called structural support.
-- At least 30 valid candles, 24 elapsed hours, $10,000 pool liquidity, and a reasonably aligned live quote/latest candle are required before any ladder is shown.
+- At least $10,000 pool liquidity and a reasonably aligned live quote/latest candle are required before any ladder is shown.
 - Confidence uses elapsed duration plus candle count, liquidity, volume, pool age, volatility, and quote/candle divergence.
 - Goal equals the selected gain percentage above simulated weighted average entry, exactly.
+- `B1` through `B4` are conditional buy triggers; `S1` is a conditional goal reference that applies after fills. The selected review window says when to reassess the evidence, not when price will arrive.
 - Missing market cap, FDV, change, or transaction data remains unavailable rather than becoming zero or borrowing another field.
 - Market-data confidence says nothing about honeypots, taxes, authorities, holders, deployer behavior, LP state, or sellability.
 - No executable quote is requested yet; displayed levels exclude real price impact, routing, tax, gas, and slippage.
@@ -121,8 +124,10 @@ npm run e2e:plans
 
 Browser harnesses accept `CHROME_PATH`. The latest exact results and environment-specific blockers live in `docs/CHECKPOINT.md`.
 
+On narrow screens, DOM and visual order both remain chart-first: token context and all six metrics, timeframe, chart, execution map, then settings and deeper analysis. This avoids hiding the result below controls and keeps keyboard order aligned with the visual layout.
+
 ## Current priorities
 
 The implementation baseline is complete, but trustworthy public launch still requires contract-security enrichment, independent sell simulation, executable size-aware quotes, abuse protection, and cross-pool divergence rules. See `docs/RECOMMENDATIONS.md` for the ordered backlog.
 
-*Updated 2026-08-30 for CMVNG Simulation v3.0.0 and Onchain ladder v1.*
+*Updated 2026-08-30 for CMVNG Simulation v3.0.0 and the Onchain ladder v1 execution-map release.*

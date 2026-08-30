@@ -16,13 +16,14 @@ const BAD_CONTRACT = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 const POOL_A = "0x2222222222222222222222222222222222222222";
 const POOL_B = "0x4444444444444444444444444444444444444444";
 const AS_OF = "2026-08-30T12:00:00.000Z";
+const AS_OF_SECONDS = Date.parse(AS_OF) / 1000;
 
 const candles = Array.from({ length: 120 }, (_, index) => {
   const trend = 1 + index * 0.0015;
   const open = trend + Math.sin((index - 1) / 5) * 0.045;
   const close = trend + Math.sin(index / 5) * 0.045;
   return {
-    time: 1_700_000_000 + index * 14_400,
+    time: AS_OF_SECONDS - ((119 - index) * 14_400),
     open,
     high: Math.max(open, close) * 1.018,
     low: Math.min(open, close) * 0.982,
@@ -30,6 +31,10 @@ const candles = Array.from({ length: 120 }, (_, index) => {
     volume: 18_000 + index * 75,
   };
 });
+const shortDailyCandles = candles.slice(0, 26).map((candle, index) => ({
+  ...candle,
+  time: AS_OF_SECONDS - ((25 - index) * 86_400),
+}));
 
 function asset(poolAddress, liquidityUsd) {
   return {
@@ -137,6 +142,9 @@ try {
         }),
       });
     }
+    const responseCandles = lastCandleUrl.searchParams.get("timeframe") === "day"
+      ? shortDailyCandles
+      : candles;
     return route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -146,7 +154,7 @@ try {
         poolAddress: lastCandleUrl.searchParams.get("pool"),
         timeframe: lastCandleUrl.searchParams.get("timeframe"),
         aggregate: Number(lastCandleUrl.searchParams.get("aggregate")),
-        candles,
+        candles: responseCandles,
       }),
     });
   });
@@ -166,9 +174,31 @@ try {
     await page.waitForSelector(".cmvng-dca-chart__canvas canvas");
     const legCount = await page.locator(".dca-leg").count();
     if (legCount !== 4) throw new Error(`expected 4 plan legs, found ${legCount}`);
+    const executionCount = await page.locator(".execution-step--buy").count();
+    if (executionCount !== 4) throw new Error(`expected 4 always-visible execution steps, found ${executionCount}`);
+    for (const markerId of ["B1", "B2", "B3", "B4", "S1", "X1"]) {
+      await page.waitForSelector(`[data-marker-id="${markerId}"]:not([hidden])`);
+    }
+    if (!(await page.textContent(".execution-map")).includes("S1 conditional exit")) {
+      throw new Error("conditional S1 execution copy is missing");
+    }
+    const executionText = await page.textContent(".execution-map");
+    if (!executionText.includes("30-day review") || !executionText.includes("Review by")) {
+      throw new Error("monitoring/review window is missing");
+    }
+    if (await page.locator(".timeframe-control button").count() !== 5) {
+      throw new Error("timeframe controls should expose five distinct candle resolutions");
+    }
+    if (await page.locator('.timeframe-control button:has-text("MAX")').count()) {
+      throw new Error("duplicate MAX timeframe is still present");
+    }
     const box = await page.locator(".cmvng-dca-chart__canvas canvas").first().boundingBox();
     if (!box || box.width < 100 || box.height < 100) throw new Error("chart canvas has no usable dimensions");
     if (lastCandleUrl?.searchParams.get("aggregate") !== "4") throw new Error("default 4-hour request was not sent");
+    const analyzerUrl = new URL(page.url());
+    if (analyzerUrl.searchParams.get("address") !== CONTRACT || analyzerUrl.searchParams.get("interval") !== "4h") {
+      throw new Error("contract and interval were not persisted in the URL");
+    }
     if (consoleErrors.length) throw new Error(consoleErrors.join(" | "));
   });
 
@@ -180,6 +210,7 @@ try {
     await page.selectOption("#pool-source", `base:${POOL_B}`);
     await nextRequest;
     if (lastCandleUrl?.searchParams.get("pool") !== POOL_B) throw new Error("alternative pool was not requested");
+    if (new URL(page.url()).searchParams.get("pool") !== `base:${POOL_B}`) throw new Error("selected pool was not persisted in the URL");
   });
 
   await step("contract route has no mobile overflow", async () => {
@@ -188,8 +219,36 @@ try {
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       if (overflow > 2) throw new Error(`horizontal overflow ${overflow}px at ${width}px`);
+      const chartTop = (await page.locator(".chart-panel").boundingBox())?.y;
+      const settingsTop = (await page.locator(".strategy-panel").boundingBox())?.y;
+      if (!(chartTop < settingsTop)) throw new Error("chart does not precede plan settings on mobile");
     }
     await page.screenshot({ path: join(SCREENSHOT_DIR, "cmvng-contract-mobile.png"), fullPage: false });
+  });
+
+  await step("26 daily candles build a labeled volatility-reference plan", async () => {
+    await page.click('.timeframe-control button:has-text("1D")');
+    await page.waitForFunction(() => document.querySelector(".cmvng-dca-chart__source")?.textContent.includes("26 candles"));
+    await page.waitForSelector('[data-marker-id="S1"]:not([hidden])');
+    const settingsText = await page.textContent(".strategy-panel");
+    if (!settingsText.includes("Volatility-reference ladder")) throw new Error("short-history plan mode is not clearly labeled");
+    if (settingsText.includes("Plan blocked")) throw new Error("26 daily candles incorrectly blocked the plan");
+    if (new URL(page.url()).searchParams.get("interval") !== "1d") throw new Error("daily interval was not persisted in the URL");
+  });
+
+  await step("decimal budgets are preserved", async () => {
+    const budget = page.locator('input[aria-label="Total simulation budget in US dollars"]');
+    await budget.fill("500.50");
+    await page.locator(".strategy-panel__heading").click();
+    if (await budget.inputValue() !== "500.5") throw new Error("decimal budget was not preserved");
+  });
+
+  await step("contract, pool, and interval survive reload", async () => {
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => document.querySelector(".cmvng-dca-chart__source")?.textContent.includes("26 candles"));
+    if (await page.locator("#pool-source").inputValue() !== `base:${POOL_B}`) throw new Error("pool selection was not restored");
+    if ((await page.locator('.timeframe-control button:has-text("1D")').getAttribute("aria-pressed")) !== "true") throw new Error("interval was not restored");
+    await page.waitForSelector('[data-marker-id="S1"]:not([hidden])');
   });
 
   await step("timeframe errors stay inside the chart", async () => {

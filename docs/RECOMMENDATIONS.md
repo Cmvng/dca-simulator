@@ -28,7 +28,7 @@ Priorities use P0 (required for trustworthy launch), P1 (high-value next), and P
 - Add saved/watchlisted plans in a database with alert thresholds.
 - Add share cards for contract tokens with chain, pool, liquidity warning, and plan zones.
 - Add a fixed higher-timeframe evidence option so changing the viewing interval need not change a long-horizon ladder.
-- Add a compact provider/window disclosure beside MAX, including its actual first/last candle timestamps.
+- Add a compact provider-window disclosure with the actual first/last candle timestamps.
 
 ## P2 — advanced intelligence
 
@@ -45,7 +45,7 @@ Use a provider adapter so the product can start keyless and graduate without a U
 
 | Role | Recommended provider | Product use |
 |---|---|---|
-| Keyless MVP | [GeckoTerminal/CoinGecko Onchain](https://docs.coingecko.com/reference/pool-ohlcv-contract-address) | Exact-pool discovery and real OHLCV. A single request is limited to roughly six months, so `MAX` must remain provider-window-aware. |
+| Keyless MVP | [GeckoTerminal/CoinGecko Onchain](https://docs.coingecko.com/reference/pool-ohlcv-contract-address) | Exact-pool discovery and real OHLCV. A single request is provider-window-limited, so the UI must report the actual returned span and avoid implying all-time history. |
 | Production market data | [CoinGecko Onchain paid](https://docs.coingecko.com/changelog) or [Birdeye OHLCV V3](https://docs.birdeye.so/reference/get-defi-v3-ohlcv) | Higher operating limits and a provider abstraction suitable for production traffic; evaluate supported chains, latency, history, and cost before choosing. |
 | Contract risk | [GoPlus token-security data](https://docs.gopluslabs.io/reference/response-details) | Honeypot, buy/sell restriction, tax, blacklist, transfer-pause, and authority signals. Treat missing fields as unknown, not safe. |
 | Independent snapshot | [DEX Screener API](https://docs.dexscreener.com/api/reference) | Cross-check pair discovery, liquidity, and current market snapshots. Its documented pair/token endpoints are not the primary historical-candle source. |

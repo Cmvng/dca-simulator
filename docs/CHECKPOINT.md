@@ -3,41 +3,47 @@
 > Current working state. Update this file at the end of each implementation session.
 
 **Date:** 2026-08-30
-**Branch:** `feat/cmvng-v2-upgrade` (Railway-tracked)
+**Branch:** `codex/onchain-completeness-fixes` from `feat/cmvng-v2-upgrade` (Railway-tracked)
 **Feature merge:** `3e67f2f` from [PR #1](https://github.com/Cmvng/dca-simulator/pull/1)
 **Core model:** CMVNG Simulation v3.0.0, unchanged
 **New methodology:** Onchain ladder v1, isolated from the behavior-locked core model
 
 ## Outcome
 
-The contract-address milestone is merged and live on the Railway production service. The established planner remains the default at `/`; public `/plan/<id>` pages and `#p=` shares are preserved. The new analyzer is lazy-loaded only at `/contract`.
+The contract-address milestone is merged and live on the Railway production service. This follow-up closes the short-history dead end and makes the complete conditional execution plan visible beside the main chart. The established planner remains the default at `/`; public `/plan/<id>` pages and `#p=` shares are preserved. The analyzer remains lazy-loaded only at `/contract`.
 
 ## Delivered
 
 - Exact contract or mint search with fuzzy matches discarded.
 - Automatic network discovery and deterministic liquidity-first pool selection, with volume as a tiebreaker.
 - Alternative exact-match pool/network selector with correct token-side and counter-token identity.
-- Validated, token-oriented GeckoTerminal OHLCV for 5m, 15m, 1h, 4h, 1d, and a provider-limited MAX view.
+- Validated, token-oriented GeckoTerminal OHLCV for 5m, 15m, 1h, 4h, and 1d. The duplicate MAX control was removed because it issued the same daily request as 1d.
 - Fomo-inspired dark navy candlestick/volume chart inside the CLEAR BLUE shell.
-- Current, buy/reference, simulated average, goal, and invalidation/scenario-floor lines; Fit includes off-candle plan levels.
+- Shaded `B1`–`B4` buy bands plus current, simulated average, `S1` goal, and invalidation/scenario-floor references; Fit includes off-candle plan levels.
+- A complete chart-adjacent execution map with each allocation and price range, trigger sequence, target, invalidation, and selectable plan-review window.
+- Explicit execution semantics: buys are conditional price triggers that may never fill; `S1` applies after fills; the review date is a reassessment deadline rather than a price prediction.
 - Crosshair OHLCV, mobile gestures, visible TradingView attribution, concise screen-reader summary, level table, and a capped recent-candle table.
 - Deterministic four-tranche price-triggered ladder with true-range ATR and repeated swing-low clustering.
-- Explicit modes: support-based only with at least two repeated zones and seven days of selected-interval history; otherwise volatility-reference.
+- Explicit tiers: a volatility-reference plan needs at least 20 candles and 24 elapsed hours; adaptive structural mode additionally needs at least 30 candles, seven days, and two repeated zones.
+- Requested-interval density and latest-candle freshness gates prevent sparse or dead-pool bars from masquerading as live evidence.
+- Short daily histories such as 26 candles now receive a conservative four-leg volatility-reference plan instead of a misleading structural claim or a dead end.
 - Duration-aware confidence: intraday candle counts cannot masquerade as months of evidence.
 - Blocking gates for price, candle count/duration, liquidity, and extreme quote/candle divergence; volume, age, and volatility feed warnings/confidence scoring.
 - Exact goal-from-average arithmetic and an explicit warning when live price already exceeds the chosen goal.
 - Honest security gap: market-data confidence is never presented as contract safety.
-- Request cancellation, stale-plan clearing during pool/timeframe changes, same-interval retry, provider timestamps, timeouts, cache policy, and normalized errors.
+- Monotonic request IDs plus synchronous cancellation prevent stale token/candle responses; contract, exact pool, and interval persist in the URL across refreshes.
+- Every budget cent is assigned deterministically across B1–B4, and neighboring price bands are capped so trigger ranges cannot overlap.
 - Same-origin Vite, standalone Railway, and Vercel-compatible API handlers for coins, tokens, and candles.
 - Dedicated mocked contract browser smoke covering success, alternate pools, timeframe errors, stale-result removal, chart canvas, four plan legs, and 320/390px overflow.
+- Mobile information hierarchy is chart-first in both visual and DOM order, with all six market metrics displayed in a compact grid instead of a cue-less horizontal scroller.
 
 ## Verification completed
 
 - [x] `npm ci`
 - [x] `npm run lint` — zero warnings/errors
-- [x] `npm test` — 56/56 pass, including the v3 behavior lock and onchain route/engine tests
+- [x] `npm test` — 61/61 pass, including the v3 behavior lock, short-history tiers, cent conservation, non-overlap, sparse-history, and stale-candle regressions
 - [x] `npm run build`
-- [x] Default planner remains a 75.63 kB gzip entry; contract code is a separate lazy 72.23 kB gzip chunk plus 3.79 kB CSS
+- [x] Default planner remains a 75.63 kB gzip entry; contract code is a separate lazy 73.85 kB gzip chunk plus 4.40 kB CSS
 - [x] Vite: `/` and `/contract` return the SPA; parameterless token/candle GETs return structured 400 JSON; OPTIONS returns 204
 - [x] Standalone server: health, root, contract SPA fallback, token/candle 400 JSON, and OPTIONS 204 all pass
 - [x] Live Solana WIF: exact pool resolution and 300 chronological 4-hour candles
@@ -62,10 +68,10 @@ The contract-address milestone is merged and live on the Railway production serv
 - Arbitrary-address endpoints still need per-IP throttling and in-flight request coalescing before public scale.
 - Cross-pool price divergence is displayed through pool choice but is not yet a blocking risk rule.
 - GeckoTerminal's public beta allowance is small and variable; production traffic needs stronger shared caching or a paid onchain tier.
-- “Any memecoin” means an exact token indexed on a supported network with an active pool and usable USD OHLCV—not every chain, bonding curve, or newly created mint.
+- “Any memecoin” means an exact token indexed on a supported network with an active pool, usable USD OHLCV, at least 20 reasonably dense and fresh candles spanning 24 hours, and acceptable market-data gates—not every chain, bonding curve, or newly created mint.
 
 ## Next handoff
 
-1. Run all three browser harnesses with a valid `CHROME_PATH` and inspect the 390px/320px screenshots.
-2. Treat the P0 items in `docs/RECOMMENDATIONS.md` as launch requirements, not optional polish.
-3. Add security and executable-quote providers before presenting the ladder as trade-ready.
+1. Re-run the populated live flow with a short-history token and verify `B1`–`B4`, `S1`, the review window, and chart-first mobile order after deployment.
+2. Run all three browser harnesses with a valid `CHROME_PATH` and inspect the 390px/320px screenshots.
+3. Treat the P0 items in `docs/RECOMMENDATIONS.md` as launch requirements, especially security and executable-quote providers before presenting the ladder as trade-ready.

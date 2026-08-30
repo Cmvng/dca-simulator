@@ -11,7 +11,6 @@ import {
   CrosshairMode,
   createChart,
   HistogramSeries,
-  LineSeries,
   LineStyle,
   TrackingModeExitMode,
 } from "lightweight-charts";
@@ -28,8 +27,8 @@ const COLORS = {
   negative: T.loss,
   dca: T.blue,
   average: "#D6DEEC",
-  target: T.blue,
-  invalidation: T.loss,
+  target: "#087A4A",
+  invalidation: "#C92A1A",
 };
 
 const PRICE_KEYS = [
@@ -167,6 +166,36 @@ function legPrice(leg) {
   return low > 0 ? low : high > 0 ? high : null;
 }
 
+function legBounds(leg, midpoint) {
+  const range = Array.isArray(leg?.range) ? leg.range : null;
+  const first = firstFinite(
+    leg?.zoneLow,
+    leg?.lowPrice,
+    leg?.lowerPrice,
+    leg?.lower,
+    leg?.minPrice,
+    leg?.zone?.low,
+    range?.[0]
+  );
+  const second = firstFinite(
+    leg?.zoneHigh,
+    leg?.highPrice,
+    leg?.upperPrice,
+    leg?.upper,
+    leg?.maxPrice,
+    leg?.zone?.high,
+    range?.[1]
+  );
+  const valid = [first, second].filter(value => value > 0);
+  if (!valid.length) return { lower: midpoint, upper: midpoint };
+  if (valid.length === 1) return { lower: valid[0], upper: valid[0] };
+  return { lower: Math.min(...valid), upper: Math.max(...valid) };
+}
+
+function markerIdForLeg(leg, index) {
+  return /^B\d+$/i.test(leg?.id) ? leg.id.toUpperCase() : `B${index + 1}`;
+}
+
 function normalizePlan(plan) {
   const source = plan && typeof plan === "object" ? plan : {};
   let rawLegs = Array.isArray(plan) ? plan : null;
@@ -183,6 +212,7 @@ function normalizePlan(plan) {
   const legs = (rawLegs || []).flatMap((leg, index) => {
     const price = legPrice(leg);
     if (!(price > 0)) return [];
+    const { lower, upper } = legBounds(leg, price);
 
     const explicitPercent = firstFinite(
       leg?.allocationPct,
@@ -205,6 +235,8 @@ function normalizePlan(plan) {
         id: String(leg?.id ?? `leg-${index + 1}`),
         label: String(leg?.label ?? leg?.name ?? `DCA ${index + 1}`),
         price,
+        lower,
+        upper,
         allocationPct,
         amount: firstFinite(
           leg?.amount,
@@ -251,6 +283,7 @@ function normalizePlan(plan) {
   return {
     legs,
     mode: source.mode || "adaptive",
+    targetPct: firstFinite(source.targetPct, source.gainTargetPct),
     currentPrice: firstFinite(
       source.currentPrice,
       source.livePrice,
@@ -421,6 +454,53 @@ const COMPONENT_CSS = `
     position: relative;
   }
   .cmvng-dca-chart__canvas { height: 100%; width: 100%; }
+  .cmvng-dca-chart__execution-overlay {
+    inset: 0 77px 0 0;
+    overflow: hidden;
+    pointer-events: none;
+    position: absolute;
+    z-index: 2;
+  }
+  .cmvng-dca-chart__buy-band {
+    background: linear-gradient(90deg, rgba(46, 107, 240, .06), rgba(46, 107, 240, .17));
+    border-bottom: 1px solid rgba(100, 149, 255, .42);
+    border-top: 1px solid rgba(100, 149, 255, .42);
+    left: 0;
+    min-height: 3px;
+    position: absolute;
+    right: 0;
+  }
+  .cmvng-dca-chart__buy-badge,
+  .cmvng-dca-chart__level-badge {
+    border-radius: 5px;
+    color: #fff;
+    font: 800 10px/1 ${SANS};
+    letter-spacing: .035em;
+    padding: 5px 6px;
+    position: absolute;
+    right: 6px;
+    white-space: nowrap;
+  }
+  .cmvng-dca-chart__buy-badge {
+    background: #2E6BF0;
+    box-shadow: 0 3px 10px rgba(46, 107, 240, .28);
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  .cmvng-dca-chart__level-marker {
+    border-top: 1px dashed var(--marker-color);
+    left: 0;
+    position: absolute;
+    right: 0;
+    top: 0;
+  }
+  .cmvng-dca-chart__level-badge {
+    background: var(--marker-color);
+    top: 0;
+    transform: translateY(-50%);
+  }
+  .cmvng-dca-chart__level-marker--target { --marker-color: ${COLORS.target}; }
+  .cmvng-dca-chart__level-marker--risk { --marker-color: ${COLORS.invalidation}; }
   .cmvng-dca-chart__tooltip {
     background: rgba(16, 21, 34, .88);
     border: 1px solid rgba(139, 147, 167, .16);
@@ -594,8 +674,11 @@ export default function DcaChart({
   const chartRef = useRef(null);
   const candleSeriesRef = useRef(null);
   const volumeSeriesRef = useRef(null);
-  const autoscaleSeriesRef = useRef(null);
+  const autoscaleRangeRef = useRef(null);
   const priceLinesRef = useRef(new Map());
+  const executionOverlayRef = useRef(null);
+  const normalizedPlanRef = useRef(null);
+  const annotationFrameRef = useRef(null);
   const formatterRef = useRef(formatPrice);
   const latestCandleRef = useRef(null);
   const crosshairActiveRef = useRef(false);
@@ -667,11 +750,13 @@ export default function DcaChart({
     normalizedPlan.legs.forEach((leg, index) => {
       const allocationLabel =
         leg.allocationPct !== null ? ` ${leg.allocationPct.toFixed(0)}%` : "";
+      const markerId = markerIdForLeg(leg, index);
       lines.push({
         key: `dca-${leg.id}-${index}`,
-        type: leg.label,
+        type: `${markerId} potential buy zone`,
         price: leg.price,
         allocation: leg.allocationPct,
+        markerId,
         options: {
           id: `cmvng-dca-${index + 1}`,
           price: leg.price,
@@ -679,7 +764,7 @@ export default function DcaChart({
           lineWidth: 2,
           lineStyle: LineStyle.Dotted,
           axisLabelVisible: true,
-          title: `${normalizedPlan.mode === "volatility-reference" ? `REF ${index + 1}` : leg.label}${allocationLabel}`,
+          title: `${markerId} ·${allocationLabel}`,
         },
       });
     });
@@ -687,7 +772,7 @@ export default function DcaChart({
     if (normalizedPlan.weightedAverage > 0) {
       lines.push({
         key: "weighted-average",
-        type: "Weighted average entry",
+        type: "Average entry after all planned buys fill",
         price: normalizedPlan.weightedAverage,
         allocation: null,
         options: {
@@ -705,9 +790,10 @@ export default function DcaChart({
     if (normalizedPlan.target > 0) {
       lines.push({
         key: "target",
-        type: "Target",
+        type: "S1 conditional target",
         price: normalizedPlan.target,
         allocation: null,
+        markerId: "S1",
         options: {
           id: "cmvng-target",
           price: normalizedPlan.target,
@@ -715,7 +801,7 @@ export default function DcaChart({
           lineWidth: 2,
           lineStyle: LineStyle.LargeDashed,
           axisLabelVisible: true,
-          title: "TARGET",
+          title: `S1 · +${normalizedPlan.targetPct?.toFixed(0) || "?"}%`,
         },
       });
     }
@@ -724,9 +810,10 @@ export default function DcaChart({
       const isReference = normalizedPlan.mode === "volatility-reference";
       lines.push({
         key: "invalidation",
-        type: isReference ? "Scenario floor" : "Invalidation",
+        type: isReference ? "X1 scenario-floor reassessment" : "X1 structural reassessment",
         price: normalizedPlan.invalidation,
         allocation: null,
+        markerId: "X1",
         options: {
           id: "cmvng-invalidation",
           price: normalizedPlan.invalidation,
@@ -734,7 +821,7 @@ export default function DcaChart({
           lineWidth: 2,
           lineStyle: LineStyle.SparseDotted,
           axisLabelVisible: true,
-          title: isReference ? "FLOOR" : "INVALID",
+          title: "X1 · REASSESS",
         },
       });
     }
@@ -744,12 +831,59 @@ export default function DcaChart({
 
   const updateTooltip = useCallback((candle) => {
     if (!tooltipRef.current || !candle) return;
-    tooltipRef.current.textContent = `${formatTime(candle.time)}  O ${formatterRef.current(
+    tooltipRef.current.textContent = `${formatTime(candle.time)} UTC  O ${formatterRef.current(
       candle.open
     )}  H ${formatterRef.current(candle.high)}  L ${formatterRef.current(
       candle.low
     )}  C ${formatterRef.current(candle.close)}  V ${formatVolume(candle.volume)}`;
   }, []);
+
+  const recalculateAnnotations = useCallback(() => {
+    const series = candleSeriesRef.current;
+    const overlay = executionOverlayRef.current;
+    const currentPlan = normalizedPlanRef.current;
+    if (!series || !overlay || !currentPlan) return;
+    const priceScaleWidth = chartRef.current?.priceScale("right").width() || 76;
+    overlay.style.right = `${priceScaleWidth + 1}px`;
+
+    currentPlan.legs.forEach((leg, index) => {
+      const markerId = markerIdForLeg(leg, index);
+      const node = overlay.querySelector(`[data-marker-id="${markerId}"]`);
+      if (!node) return;
+      const upperY = series.priceToCoordinate(leg.upper);
+      const lowerY = series.priceToCoordinate(leg.lower);
+      if (!Number.isFinite(upperY) || !Number.isFinite(lowerY)) {
+        node.hidden = true;
+        return;
+      }
+      node.hidden = false;
+      node.style.top = `${Math.min(upperY, lowerY)}px`;
+      node.style.height = `${Math.max(3, Math.abs(lowerY - upperY))}px`;
+    });
+
+    [
+      ["S1", currentPlan.target],
+      ["X1", currentPlan.invalidation],
+    ].forEach(([markerId, price]) => {
+      const node = overlay.querySelector(`[data-marker-id="${markerId}"]`);
+      if (!node) return;
+      const y = series.priceToCoordinate(price);
+      if (!Number.isFinite(y)) {
+        node.hidden = true;
+        return;
+      }
+      node.hidden = false;
+      node.style.transform = `translateY(${y}px)`;
+    });
+  }, []);
+
+  const scheduleAnnotationLayout = useCallback(() => {
+    if (annotationFrameRef.current) cancelAnimationFrame(annotationFrameRef.current);
+    annotationFrameRef.current = requestAnimationFrame(() => {
+      annotationFrameRef.current = null;
+      recalculateAnnotations();
+    });
+  }, [recalculateAnnotations]);
 
   const fitChart = useCallback(() => {
     const chart = chartRef.current;
@@ -757,14 +891,16 @@ export default function DcaChart({
     if (!chart || !series) return;
     series.priceScale().setAutoScale(true);
     chart.timeScale().fitContent();
-  }, []);
+    scheduleAnnotationLayout();
+  }, [scheduleAnnotationLayout]);
 
   useEffect(() => {
     if (!chartContainerRef.current) return undefined;
 
+    const chartContainer = chartContainerRef.current;
     const priceLines = priceLinesRef.current;
 
-    const chart = createChart(chartContainerRef.current, {
+    const chart = createChart(chartContainer, {
       autoSize: true,
       layout: {
         background: { type: ColorType.Solid, color: COLORS.background },
@@ -844,6 +980,18 @@ export default function DcaChart({
     });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
+      autoscaleInfoProvider: baseImplementation => {
+        const base = baseImplementation();
+        const planRange = autoscaleRangeRef.current;
+        if (!base?.priceRange || !planRange) return base;
+        return {
+          ...base,
+          priceRange: {
+            minValue: Math.min(base.priceRange.minValue, planRange.minimum),
+            maxValue: Math.max(base.priceRange.maxValue, planRange.maximum),
+          },
+        };
+      },
       borderVisible: false,
       downColor: COLORS.negative,
       lastValueVisible: false,
@@ -864,21 +1012,9 @@ export default function DcaChart({
       scaleMargins: { top: 0.82, bottom: 0 },
     });
 
-    // Lightweight Charts excludes custom price lines from autoscale. A fully
-    // transparent line series carries the outer plan levels so Fit includes
-    // distant buy references, targets, and floors without drawing fake data.
-    const autoscaleSeries = chart.addSeries(LineSeries, {
-      color: "rgba(0, 0, 0, 0)",
-      crosshairMarkerVisible: false,
-      lastValueVisible: false,
-      lineWidth: 1,
-      priceLineVisible: false,
-    });
-
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
-    autoscaleSeriesRef.current = autoscaleSeries;
 
     const onCrosshairMove = (param) => {
       const candle = param.seriesData?.get(candleSeries);
@@ -898,20 +1034,35 @@ export default function DcaChart({
     };
 
     const onDoubleClick = () => fitChart();
+    const onChartInteraction = () => scheduleAnnotationLayout();
     chart.subscribeCrosshairMove(onCrosshairMove);
     chart.subscribeDblClick(onDoubleClick);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onChartInteraction);
+    chartContainer.addEventListener("wheel", onChartInteraction, { passive: true });
+    chartContainer.addEventListener("pointermove", onChartInteraction, { passive: true });
+    chartContainer.addEventListener("touchmove", onChartInteraction, { passive: true });
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(onChartInteraction);
+    resizeObserver?.observe(chartContainer);
 
     return () => {
       chart.unsubscribeCrosshairMove(onCrosshairMove);
       chart.unsubscribeDblClick(onDoubleClick);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onChartInteraction);
+      chartContainer.removeEventListener("wheel", onChartInteraction);
+      chartContainer.removeEventListener("pointermove", onChartInteraction);
+      chartContainer.removeEventListener("touchmove", onChartInteraction);
+      resizeObserver?.disconnect();
+      if (annotationFrameRef.current) cancelAnimationFrame(annotationFrameRef.current);
       chart.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
-      autoscaleSeriesRef.current = null;
+      autoscaleRangeRef.current = null;
       priceLines.clear();
     };
-  }, [fitChart, updateTooltip]);
+  }, [fitChart, scheduleAnnotationLayout, updateTooltip]);
 
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
@@ -976,23 +1127,18 @@ export default function DcaChart({
 
     previousDatasetRef.current = nextDataset;
     if (shouldFit) requestAnimationFrame(fitChart);
-  }, [chartPriceFormatter, decimals, displaySymbol, fitChart, latestCandle, normalizedCandles, updateTooltip]);
+    else scheduleAnnotationLayout();
+  }, [chartPriceFormatter, decimals, displaySymbol, fitChart, latestCandle, normalizedCandles, scheduleAnnotationLayout, updateTooltip]);
 
   useEffect(() => {
-    const series = autoscaleSeriesRef.current;
-    const firstTime = normalizedCandles[0]?.time;
-    const lastTime = normalizedCandles.at(-1)?.time;
+    const series = candleSeriesRef.current;
     const prices = desiredLines.map(line => line.price).filter(price => price > 0);
-    if (!series || !firstTime || !lastTime || !prices.length) {
-      series?.setData([]);
-      return;
-    }
-    const minimum = Math.min(...prices);
-    const maximum = Math.max(...prices);
-    series.setData(firstTime === lastTime || minimum === maximum
-      ? [{ time: firstTime, value: minimum }]
-      : [{ time: firstTime, value: minimum }, { time: lastTime, value: maximum }]);
-  }, [desiredLines, normalizedCandles]);
+    autoscaleRangeRef.current = prices.length
+      ? { minimum: Math.min(...prices), maximum: Math.max(...prices) }
+      : null;
+    series?.priceScale().setAutoScale(true);
+    scheduleAnnotationLayout();
+  }, [desiredLines, scheduleAnnotationLayout]);
 
   useEffect(() => {
     const series = candleSeriesRef.current;
@@ -1013,11 +1159,17 @@ export default function DcaChart({
       if (lineApi) lineApi.applyOptions(line.options);
       else existing.set(line.key, series.createPriceLine(line.options));
     }
-  }, [desiredLines]);
+    scheduleAnnotationLayout();
+  }, [desiredLines, scheduleAnnotationLayout]);
+
+  useEffect(() => {
+    normalizedPlanRef.current = normalizedPlan;
+    scheduleAnnotationLayout();
+  }, [normalizedPlan, scheduleAnnotationLayout]);
 
   const errorMessage = messageFromError(error);
   const state = loading ? "loading" : errorMessage ? "error" : latestCandle ? "ready" : "empty";
-  const chartLabel = `${displaySymbol} candlestick chart with ${normalizedCandles.length} OHLCV candles and ${normalizedPlan.legs.length} ${normalizedPlan.mode === "volatility-reference" ? "volatility reference" : "DCA entry"} levels.`;
+  const chartLabel = `${displaySymbol} candlestick chart with ${normalizedCandles.length} real OHLCV candles and ${normalizedPlan.legs.length} ${normalizedPlan.mode === "volatility-reference" ? "volatility reference" : "DCA entry"} levels.`;
 
   return (
     <section className="cmvng-dca-chart" aria-labelledby={`${summaryId}-title`}>
@@ -1025,7 +1177,7 @@ export default function DcaChart({
 
       <header className="cmvng-dca-chart__head">
         <div className="cmvng-dca-chart__identity">
-          <span className="cmvng-dca-chart__eyebrow">Real pool OHLCV</span>
+          <span className="cmvng-dca-chart__eyebrow">Real pool OHLCV · B1–B4 / S1 map</span>
           <h2 className="cmvng-dca-chart__symbol">{displaySymbol} / USD</h2>
         </div>
         <div className="cmvng-dca-chart__quote">
@@ -1046,9 +1198,50 @@ export default function DcaChart({
         aria-describedby={`${summaryId}-description`}
       >
         <div ref={chartContainerRef} className="cmvng-dca-chart__canvas" aria-hidden="true" />
+        <div
+          ref={executionOverlayRef}
+          className="cmvng-dca-chart__execution-overlay"
+          aria-hidden="true"
+        >
+          {normalizedPlan.legs.map((leg, index) => {
+            const markerId = markerIdForLeg(leg, index);
+            return (
+              <div
+                key={markerId}
+                className="cmvng-dca-chart__buy-band"
+                data-marker-id={markerId}
+                hidden
+              >
+                <span className="cmvng-dca-chart__buy-badge">
+                  {markerId} · {leg.allocationPct !== null ? `${leg.allocationPct.toFixed(0)}%` : "BUY"}
+                </span>
+              </div>
+            );
+          })}
+          {normalizedPlan.target > 0 && (
+            <div
+              className="cmvng-dca-chart__level-marker cmvng-dca-chart__level-marker--target"
+              data-marker-id="S1"
+              hidden
+            >
+              <span className="cmvng-dca-chart__level-badge">
+                S1 · +{normalizedPlan.targetPct?.toFixed(0) || "?"}%
+              </span>
+            </div>
+          )}
+          {normalizedPlan.invalidation > 0 && (
+            <div
+              className="cmvng-dca-chart__level-marker cmvng-dca-chart__level-marker--risk"
+              data-marker-id="X1"
+              hidden
+            >
+              <span className="cmvng-dca-chart__level-badge">X1 · REASSESS</span>
+            </div>
+          )}
+        </div>
         <div ref={tooltipRef} className="cmvng-dca-chart__tooltip" aria-hidden="true">
           {latestCandle
-            ? `${formatTime(latestCandle.time)} · OHLCV`
+            ? `${formatTime(latestCandle.time)} UTC · OHLCV`
             : "Move across the chart to inspect OHLCV"}
         </div>
         <button
@@ -1104,7 +1297,7 @@ export default function DcaChart({
               className="cmvng-dca-chart__key-line cmvng-dca-chart__key-line--dotted"
               style={{ "--key-color": COLORS.dca }}
             />
-            {normalizedPlan.mode === "volatility-reference" ? "Volatility references" : "DCA entries"}
+            {normalizedPlan.mode === "volatility-reference" ? "B1–B4 volatility bands" : "B1–B4 potential buy zones"}
           </span>
         )}
         {normalizedPlan.weightedAverage > 0 && (
@@ -1122,7 +1315,7 @@ export default function DcaChart({
               className="cmvng-dca-chart__key-line cmvng-dca-chart__key-line--dashed"
               style={{ "--key-color": COLORS.target }}
             />
-            Target
+            S1 conditional target
           </span>
         )}
         {normalizedPlan.invalidation > 0 && (
@@ -1131,11 +1324,15 @@ export default function DcaChart({
               className="cmvng-dca-chart__key-line cmvng-dca-chart__key-line--dotted"
               style={{ "--key-color": COLORS.invalidation }}
             />
-            {normalizedPlan.mode === "volatility-reference" ? "Scenario floor" : "Invalidation"}
+            X1 reassess level
           </span>
         )}
         {!normalizedPlan.legs.length && (
-          <span className="cmvng-dca-chart__key">DCA levels appear after analysis</span>
+          <span className="cmvng-dca-chart__key">
+            {normalizedPlan.mode === "blocked"
+              ? "Market chart only — DCA overlay unavailable"
+              : "DCA levels appear after analysis"}
+          </span>
         )}
       </div>
 
