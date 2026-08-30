@@ -129,10 +129,28 @@
 | Main-chart execution labels are `B1`–`B4` for conditional buys and `S1` for the post-fill goal | Short identifiers make the trigger sequence legible on mobile while the adjacent map carries allocation, range, and risk detail |
 | Buy zones are shaded ranges rather than single-price promises | The calculation produces upper/lower bands; showing only a midpoint would imply false fill precision |
 | The review window is a user-selected reassessment period, not a forecast horizon or scheduled trade | It gives a stale-plan checkpoint without inventing future candles, dates of fills, or guaranteed execution |
-| Mobile contract analysis stays chart-first in both DOM and visual order | Users asked to see the plan immediately, and matching orders preserves keyboard and screen-reader navigation |
+| ~~Mobile contract analysis stays chart-first in both DOM and visual order~~ Superseded by Contract Plan Studio v2 | The current mobile decision path is input/settings → profiles → selected chart → outcomes/risk → share; DOM and visual order still match for keyboard and screen-reader navigation |
 | Candle eligibility includes requested-interval density and freshness | A sparse or abandoned pool must not look current merely because 20 old trades span more than 24 hours |
 | B1–B4 allocations conserve integer cents and buy bands cannot overlap | Displayed allocations must add to the stated budget, and one market price must not ambiguously trigger several planned tranches |
-| Contract, exact pool, and candle interval persist in query parameters | A refreshed or shared analysis must reopen the same evidence context instead of silently changing pools |
+| Contract, exact pool, interval, amount, monitoring duration, profile, value unit, target, and touch visibility persist in query parameters | A refreshed or shared analysis must reopen the same evidence and plan context instead of silently changing the result |
+
+## Contract Plan Studio v2 decisions (2026-08-30)
+
+| Decision | Reason |
+|---|---|
+| Always expose three price-zone profiles—Deep pullback, Balanced, and Early entry—when the evidence gates allow a plan | Users can compare meaningfully different allocation/spacing shapes without hiding alternatives; these are risk-shape choices, not investor suitability recommendations or financial advice |
+| A selected duration of 7–90 days is a monitoring/reassessment window | Price-triggered zones may fill immediately, later, or never; duration must not be described as a promised fill schedule, holding period, or price forecast |
+| Automatic targets scale with observed volatility; a user may explicitly override the target | Keeps the default internally consistent with the evidence while preserving user intent and preventing a hidden target change |
+| Price is the source series; MCAP and FDV are implied views created with the current valuation-to-price ratio | Historical supply changes are not available from the candle provider. The UI and cards disclose the constant-supply-ratio assumption, never call the transformed data real valuation OHLCV, and never substitute price, MCAP, or FDV for a missing requested value |
+| The planned action rail, retrospective touch markers, and modeled/executed events are distinct concepts | The rail is the current conditional plan. Historical touches are retrospective and in-sample—the levels were not known at those historical times—and are not fills, trades, or a backtest. Actual executions do not exist in the product |
+| `X1` triggers only after an interval close below the reassessment level | A wick alone does not trigger it. `X1` is a manual review cue, not an automatic or guaranteed stop; gaps and execution effects can cause a larger loss than the exact-level scenario |
+| `S1` and `X1` terminal values assume all four buys fill | Makes the scenario denominator explicit and avoids presenting a partially filled plan as fully deployed |
+| Prefix-fill P/L is conditional on the quote later returning to today's quote | Without that explicit terminal-price assumption, the values could be mistaken for immediate profit. All outcomes remain before fees, slippage, taxes, gas, and route impact |
+| Contract share cards have a dedicated model and renderer in X, square, and story formats | Each export carries the selected profile, budget, duration, unit, B/S/X levels, evidence quality, timestamp, selected pool/DEX/counter-token provenance, `PLANNED · NOT EXECUTED`, and the material modeling assumptions |
+| Full contract-plan URL state is `address`, `pool`, `interval`, `amount`, `duration`, `plan`, `unit`, `target`, and `touches` | Refreshes and shares must reproduce both the market evidence and the user's selected plan presentation |
+| Address draft state is separate from canonical resolved-token state | Typing a new address must not relabel an already resolved analysis, card, or share link before the new scan succeeds |
+| The main simulator chart uses `+`, `−`, and `!` only as modeled annotations | `+` marks sampled modeled scheduled purchases, `−` marks a conditional target crossing with no sale modeled, and `!` marks the lowest modeled sample rather than an exit or stop |
+| Mobile Plan Studio order is input/settings → profile choices → selected chart → outcomes/risk → share | The user can understand and choose the assumptions before interpreting the chart, then inspect consequences before exporting; unselected profile detail may collapse to keep the comparison scannable |
 
 ### Onchain operational constraints
 
@@ -168,3 +186,11 @@
   Meteora pool and 26 daily candles: the chart displayed `B1`–`B4`, `S1`, and `X1`; the execution
   map showed all allocations and the review date; address/pool/interval survived reload; decimal
   budget input remained exact; and no app-origin console errors were present.
+- **2026-08-30 (Contract Plan Studio v2 working tree)** — Expanded the single onchain ladder into
+  three visible price-zone profiles with amount, monitoring-duration, target, and Price/MCAP/FDV
+  controls. Added a Fomo-inspired planned-action rail, explicitly in-sample historical touches,
+  close-confirmed manual X1 reassessment, conditional prefix/all-fill outcome math, three onchain
+  share-card formats with market-source provenance, and complete query-state restoration. The main
+  simulator chart also gained honest modeled purchase/target/low annotations. Mobile order now
+  follows inputs and profiles into the selected chart, outcomes, risk context, and sharing. Local
+  lint, 82 tests, build, and diff checks pass; merge, deployment, and live verification are pending.

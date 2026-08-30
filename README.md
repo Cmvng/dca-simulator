@@ -15,13 +15,17 @@ A crypto DCA **decision engine** with two product modes:
 - Automatic network discovery and deterministic highest-liquidity pool selection, with volume as a tiebreaker.
 - A pool/network selector for alternative exact matches.
 - Pool-specific USD OHLCV at 5-minute, 15-minute, 1-hour, 4-hour, and daily intervals.
-- TradingView Lightweight Charts candlesticks and volume with shaded `B1`–`B4` buy bands, a weighted-entry reference, `S1` goal marker, and structural invalidation or scenario-floor line.
-- Four deterministic DCA zones derived from historical swing-low evidence where available and clearly labelled ATR spacing otherwise.
-- A chart-adjacent execution map with allocation, price range, trigger order, review window, and an explicit reminder that price triggers may never fill.
+- TradingView Lightweight Charts candlesticks and volume with a Fomo-inspired left execution rail, shaded `B1`–`B4` buy bands, an `S1` conditional target reference, and close-confirmed manual `X1` reassessment.
+- Three visible risk styles—Deep pullback, Balanced, and Early entry—with distinct zone spacing and budget allocations. Only the selected plan is plotted.
+- Price, market-cap, and FDV chart modes. Valuation levels are derived from the current reported price-to-valuation ratio, explicitly assume constant supply, and never substitute FDV for missing market cap.
+- Optional historical intersections with the current plan levels, visibly and accessibly labelled illustrative—not fills, trades, or a backtest.
+- A collapsible execution map with allocation, primary valuation and price ranges, trigger order, monitoring window, and an explicit reminder that price triggers may never fill.
 - Blocking gates for price, candle count/duration, interval density, candle freshness, liquidity, and extreme quote/candle divergence; volume, age, and volatility contribute warnings and confidence scoring.
-- Adjustable budget and goal. Budget changes allocations and quantities, never the market-derived levels.
-- Chart-first mobile layout with all six market metrics visible in a compact grid before plan controls.
-- Request IDs plus cancellation prevent stale responses, while address/pool/interval URL state makes an analysis refreshable and shareable.
+- Adjustable DCA amount, 7–90 day monitoring duration, and either volatility-scaled or custom S1. Amount changes allocations and quantities, never the market-derived levels.
+- Compact scenario summaries for prefix fills, all-fills-at-live, S1, and X1, including explicit downside math before fees, slippage, price impact, and taxes.
+- Dedicated X, square, and story share cards with token/chain/CA, plan style, amount, duration, B1–B4, S1, X1, evidence quality, timestamp, and prominent `PLANNED · NOT EXECUTED` copy.
+- Mobile hierarchy is inputs → all plan choices → one large selected-plan chart → outcome → share card.
+- Request IDs plus cancellation prevent stale responses, while address/pool/interval/amount/duration/profile/unit/target URL state makes the complete analysis refreshable and shareable.
 
 ### Top 250 decision engine
 
@@ -60,7 +64,8 @@ The browser harnesses use `CHROME_PATH` when Chromium is installed outside the d
 | Product shell | `src/AppShell.jsx`, `src/main.jsx` | Keeps the established planner on `/` and lazy-loads contract analysis on `/contract`. |
 | Contract UI | `src/components/OnchainAnalyzer.jsx` | Address resolution, pool selection, candles, timeframes, settings, risk states, and plan presentation. |
 | Candlestick chart | `src/components/DcaChart.jsx` | Real OHLCV, volume, reference levels, responsive interactions, accessible data, and TradingView attribution. |
-| Onchain engine | `src/lib/onchain/dcaEngine.js` | Candle normalization, true-range ATR, data gates, support clustering, zones, and plan arithmetic. |
+| Onchain engine | `src/lib/onchain/dcaEngine.js` | Candle normalization, true-range ATR, data gates, three plan profiles, valuation projections, volatility context, fill scenarios, and S1/X1 arithmetic. |
+| Contract share cards | `src/lib/sharing/onchainShareModel.js`, `src/lib/sharing/onchainShareCard.js` | Dedicated onchain card model and PNG renderer; intentionally separate from the established-asset card model. |
 | Onchain routes | `api/token.js`, `api/candles.js`, `api/_onchain.js` | Exact pool discovery, normalized OHLCV, validation, caching, and provider-error handling. |
 | Established-asset app | `src/App.jsx`, `src/components/`, `src/hooks/` | Existing plan builder, results, retention, sharing, and public-plan experience. |
 | Versioned simulator | `src/lib/simulation/` | Frozen, tested v3 numerical engine. The contract analyzer does not modify it. |
@@ -71,9 +76,10 @@ The contract flow is deterministic:
 1. `/api/token` searches by address and discards every pool without an exact base/quote address match.
 2. The strongest active pool is selected by liquidity, then volume; alternatives remain user-selectable.
 3. `/api/candles` verifies that exact token belongs to the selected pool and returns validated chronological OHLCV.
-4. The local engine either blocks weak data or calculates four descending scenario zones.
+4. The local engine either blocks weak data or calculates three distinct four-zone profiles from the same evidence.
 5. The chart draws only historical candles plus shaded buy bands and horizontal scenario references. It never draws fabricated future candles or a predicted price path.
-6. `B1` through `B4` identify descending conditional buys; `S1` is the selected goal above simulated weighted average entry, not a promise or automatic order.
+6. `B1` through `B4` identify descending conditional buys; `S1` is conditional after fills and `X1` is a manual reassessment point, not a guaranteed stop execution.
+7. Optional candle markers show where past OHLC ranges intersect today’s levels; they are illustrative context and never described as historical trades or realized performance.
 
 ## What “supported” means
 
@@ -98,7 +104,7 @@ The chart exposes candle resolutions from 5 minutes through 1 day. The former `M
 - Reported liquidity and volume can be manipulated, fragmented, removed, or stale.
 - No executable round-trip quote is requested yet, so displayed plans exclude real routing, price impact, taxes, gas, and slippage.
 - ATR fallback levels are volatility references, not detected support or forecasts.
-- `B1`–`B4`, `S1`, goal, and invalidation levels are conditional references, not guaranteed fills or executable orders. The review window is a prompt to reassess stale assumptions, not a forecast horizon. A memecoin can become unsellable or lose 100%.
+- `B1`–`B4`, `S1`, and `X1` levels are conditional references, not guaranteed fills or executable orders. The monitoring window is a prompt to reassess stale assumptions, not a fill deadline. A memecoin can become unsellable or lose 100%.
 
 GoPlus or another independent security provider, plus size-aware buy-and-sell quotes, should be added before presenting this as a launch-ready security screen.
 

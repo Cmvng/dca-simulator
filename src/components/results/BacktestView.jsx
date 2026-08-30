@@ -39,10 +39,10 @@ export default function BacktestView({ bt, selected }) {
         </div>
         <Numeral size={58}>{fmtUSD(heroVal)}</Numeral>
         <div style={{ marginTop: 14 }}>
-          <DeltaBadge profit={profit} roiPct={bt.roiPct} suffix="what actually happened" />
+          <DeltaBadge profit={profit} roiPct={bt.roiPct} suffix="modeled on historical prices" />
         </div>
         <div style={{ ...body, marginTop: 14 }}>
-          Real {symbol} prices — no scaling, no assumptions. Past performance does not determine future results.
+          Historical {symbol} prices are unscaled; the purchase schedule, contribution amounts, and configured fees and slippage are modeled. Taxes and additional market impact are not included. Past performance does not determine future results.
         </div>
       </Section>
 
@@ -88,7 +88,7 @@ export default function BacktestView({ bt, selected }) {
         <div style={{ marginTop: 10 }}>
           <BuyBarcode entries={bt.entries} madeCount={bt.entries} currentIndex={null} />
           <div style={{ ...caption, marginTop: 6 }}>
-            One tick per executed buy — all {bt.entries} were made in this period.
+            One tick per modeled scheduled buy — all {bt.entries} are simulated against this historical period.
           </div>
         </div>
       </Section>
