@@ -4,18 +4,20 @@
 
 **Date:** 2026-08-30
 **Working branch:** `codex/contract-plan-studio`
-**Deployment target:** `feat/cmvng-v2-upgrade` (Railway-tracked; this release is not merged or live-verified yet)
+**Deployment target:** `feat/cmvng-v2-upgrade` (Railway-tracked; Contract Plan Studio v2 is merged and live)
 **Remote base for this release:** `6500593733fecf062176f6aa6cd0f8bab0eca0d8`
+**Release merge:** PR #4 at `98254613638e5b2c919e7fb3018053a83a261ef7`
+**Railway deployment:** `abdd60fe-b704-4093-aa81-1aafdcb18e7a` (`SUCCESS`)
 **Core model:** CMVNG Simulation v3.0.0, unchanged
 **Onchain methodology:** Contract Plan Studio v2, isolated from the behavior-locked core model
 
 ## Outcome
 
-Contract Plan Studio v2 is implemented in the working tree. Pasting an exact supported token address now produces three visible price-zone risk profiles, a selectable Price/MCAP/FDV execution chart, amount and monitoring-duration controls, scenario outcomes, and exportable plan cards. The established planner at `/` also has compact modeled `+`, conditional target `−`, and low-water `!` annotations.
+Contract Plan Studio v2 shipped through PR #4 and is live in production. Pasting an exact supported token address now produces three visible price-zone risk profiles, a selectable Price/MCAP/FDV execution chart, amount and monitoring-duration controls, scenario outcomes, and exportable plan cards. The established planner at `/` also has compact modeled `+`, conditional target `−`, and low-water `!` annotations.
 
-This checkpoint describes the implementation before publication. It does **not** claim that this release has been merged, deployed, or verified on Railway.
+Production acceptance passed with STONK resolved to the exact selected Meteora pool and 26 real `1D` candles. The live flow exposed all three profiles; Price, MCAP, and FDV views; `B1`–`B4`, `S1`, and `X1`; persistent URL state across reload; card generation; main-chart annotations; and no app-origin console errors.
 
-## Delivered in this working tree
+## Delivered in Contract Plan Studio v2
 
 - Three deterministic price-zone profiles are always presented when the evidence gates allow a plan: **Deep pullback**, **Balanced**, and **Early entry**. They change allocation and spacing; they are plan-shape/risk profiles, not personal suitability recommendations.
 - Budget and 7–90 day duration controls are part of the plan context. Duration is a monitoring/reassessment window, not a promised fill period, holding period, or forecast.
@@ -36,7 +38,7 @@ This checkpoint describes the implementation before publication. It does **not**
 - The main `/` portfolio chart now labels sampled modeled purchases with `+`, the first conditional target crossing with `−`, and the lowest modeled sample with `!`. These are simulation annotations—not executed trades, an automatic sale, or a stop.
 - The established `/`, public `/plan/<id>`, and `#p=` flows remain separate from the lazy-loaded `/contract` implementation.
 
-## Verification completed for this working tree
+## Release verification completed
 
 - [x] `npm run lint` — zero warnings/errors
 - [x] `npm test` — 82/82 pass, including profile construction, valuation projection, close-confirmed X1 touches, wick-only rejection, share-card fallback/provenance, and the behavior-locked v3 core
@@ -44,16 +46,18 @@ This checkpoint describes the implementation before publication. It does **not**
 - [x] `git diff --check`
 - [x] Contract browser smoke updated for all three profiles, unit/profile/duration/target/touch query persistence, decimal budgets, and mobile source order
 - [x] Main-chart and contract-chart language audited so planned levels, modeled events, and retrospective touches are not described as executions
+- [x] PR #4 reviewed and merged into the Railway-tracked branch at `98254613638e5b2c919e7fb3018053a83a261ef7`
+- [x] Railway deployment `abdd60fe-b704-4093-aa81-1aafdcb18e7a` completed with `SUCCESS`
+- [x] Live STONK acceptance used the exact selected Meteora pool and returned 26 `1D` candles
+- [x] Live acceptance covered all three profiles, Price/MCAP/FDV, `B1`–`B4`/`S1`/`X1`, URL persistence across reload, card generation, main-chart annotations, and zero app-origin console errors
 
-## Publication and live verification still pending
+## Publication and live acceptance completed
 
-- [ ] Create and review the GitHub pull request against `feat/cmvng-v2-upgrade`.
-- [ ] Merge only after CI/review gates pass and confirm Railway deploys the merged commit.
-- [ ] Verify the production `/contract` flow with an exact token and pool across desktop and mobile widths.
-- [ ] Verify all three profiles, Price/MCAP/FDV availability behavior, touch toggle, amount/duration/custom target, full URL reload, card export, and zero app-origin console errors.
-- [ ] Regress the production `/`, `/plan/<id>`, and hash-share flows.
+- [x] GitHub PR #4 completed review and merged into `feat/cmvng-v2-upgrade`.
+- [x] The merged commit deployed successfully through Railway.
+- [x] The production `/contract` flow passed the release acceptance checks listed above.
 
-## Known launch gaps
+## Known post-release gaps
 
 - No honeypot, sellability, tax, authority, holder-concentration, deployer-history, or LP lock/burn scan yet.
 - No executable buy-and-sell quotes, so route liquidity, price impact, taxes, gas, and slippage remain unknown.
@@ -66,7 +70,7 @@ This checkpoint describes the implementation before publication. It does **not**
 
 ## Next handoff
 
-1. Complete the final automated checks and independent UI/semantics review.
-2. Publish the reviewed commit through GitHub, merge into the Railway-tracked branch, and wait for a successful deployment.
-3. Perform the pending live acceptance checks before marking this release deployed.
-4. Keep the P0 security and executable-quote integrations in `docs/RECOMMENDATIONS.md` as requirements before any trade-ready CTA.
+1. Monitor the live Contract Plan Studio v2 release and retain the exact-pool and console-error checks in future acceptance runs.
+2. Keep the P0 security and executable-quote integrations in `docs/RECOMMENDATIONS.md` as requirements before any trade-ready CTA.
+3. Add rate limiting, request coalescing, and stronger shared market-data caching before public scale.
+4. Keep retrospective touches descriptive until rolling or prefix out-of-sample validation exists.
