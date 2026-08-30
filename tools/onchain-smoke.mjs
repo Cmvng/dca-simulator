@@ -228,11 +228,11 @@ try {
     if (!/not a (?:price )?forecast/i.test(chartCopy)) {
       throw new Error("the chart does not clearly label the volatility sample as not a forecast");
     }
-    if (!/B · planned buy/i.test(chartCopy) || !/S · profit exit/i.test(chartCopy)) {
-      throw new Error("the chart legend is missing clear buy and profit-exit markers");
+    if (!/B · simulated buy/i.test(chartCopy) || !/S · target close/i.test(chartCopy)) {
+      throw new Error("the chart legend is missing clear buy and conditional target markers");
     }
     const chartLabel = await page.locator(".cmvng-scheduled-chart__canvas").getAttribute("aria-label");
-    if (!/planned buy markers/i.test(chartLabel || "")) {
+    if (!/simulated purchases/i.test(chartLabel || "")) {
       throw new Error("the chart does not expose its scheduled buys to assistive technology");
     }
 
@@ -242,6 +242,21 @@ try {
       if (await valueButtons.filter({ hasText: label }).count() !== 1) {
         throw new Error(`missing ${label} value control`);
       }
+    }
+
+    const chartErrorStart = consoleErrors.length;
+    for (const { label, unit } of [
+      { label: "Price", unit: "price" },
+      { label: "FDV", unit: "fdv" },
+      { label: "MCAP", unit: "marketCap" },
+    ]) {
+      await page.getByRole("button", { name: label, exact: true }).first().click();
+      await settle(page);
+      requireQuery(page.url(), { unit });
+    }
+    const chartErrors = consoleErrors.slice(chartErrorStart);
+    if (chartErrors.length) {
+      throw new Error(`chart value-mode errors: ${chartErrors.join(" | ")}`);
     }
 
     const canvasBox = await page.locator(".cmvng-scheduled-chart__canvas canvas").first().boundingBox();
