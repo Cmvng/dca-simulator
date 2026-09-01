@@ -181,7 +181,11 @@ try {
 
   const page = await context.newPage();
   page.on("console", message => {
-    if (message.type() === "error") consoleErrors.push(message.text());
+    if (message.type() !== "error") return;
+    // this suite aborts font requests itself (route above) — the resulting
+    // ERR_FAILED is harness noise, not an app failure
+    if (/fonts\.(?:googleapis|gstatic)\.com/.test(message.location()?.url || "")) return;
+    consoleErrors.push(message.text());
   });
   page.on("pageerror", error => consoleErrors.push(`PAGEERROR: ${error.message}`));
 
@@ -338,8 +342,10 @@ try {
       return url.pathname === "/api/candles" && url.searchParams.get("pool") === POOL_B;
     });
     await page.selectOption("#pool-source", `base:${POOL_B}`);
-    await nextRequest;
-    if (lastCandleUrl?.searchParams.get("pool") !== POOL_B) {
+    // judge the awaited request itself — the request event resolves before the
+    // route handler updates lastCandleUrl, so reading that here is a race
+    const poolRequest = await nextRequest;
+    if (new URL(poolRequest.url()).searchParams.get("pool") !== POOL_B) {
       throw new Error("alternative pool was not requested");
     }
     await page.waitForFunction(expectedPool => (
