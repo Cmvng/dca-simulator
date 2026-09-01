@@ -1,8 +1,14 @@
 // Standalone production server (used on Railway / any Node host).
-// Serves the static Vite build from dist/ and handles /api/coins with the
-// SAME handler that runs as a Vercel Edge Function in a Vercel deploy.
-// Since there is no edge cache here, responses are cached in memory using
-// each response's own s-maxage — so CoinGecko still gets ~1 call per window.
+// Serves the static Vite build from dist/ and handles /api/coins, /api/token
+// and /api/candles with the SAME handlers that run as Vercel Edge Functions
+// in a Vercel deploy. Since there is no edge cache here, responses are cached
+// in memory using each response's own s-maxage — so the data providers still
+// get ~1 call per window — and non-200 responses are memoized briefly so a
+// client repeating a bad address does not re-hit the provider each time.
+// /api/token and /api/candles additionally share a generous per-IP rate
+// limit: every visitor shares this deployment's single upstream egress IP,
+// so one looping client must not be able to exhaust GeckoTerminal's
+// unauthenticated quota for everyone.
 
 import http from "node:http";
 import { readFile, stat } from "node:fs/promises";
@@ -28,14 +34,51 @@ const MIME = {
   ".txt": "text/plain",
 };
 
-// url -> { body:Buffer, headers:Object, status:number, expires:number }
+// key -> { body:Buffer, headers:Object, status:number, expires:number }
 const apiCache = new Map();
 const MAX_CACHE_ENTRIES = 500;
+// Non-200 responses advertise no-store to browsers, but memoizing them here
+// briefly means a client looping one bad address costs the upstream provider
+// one call per window instead of one call per request. Short enough that a
+// transient upstream 5xx/429 never outlives the incident.
+const NEGATIVE_TTL_MS = 30_000;
 
 function cacheTtlMs(headers) {
   const cc = headers["cache-control"] || "";
   const m = /s-maxage=(\d+)/.exec(cc);
   return m ? Number(m[1]) * 1000 : 0;
+}
+
+// The handlers treat several spellings of a request as one resource: aliased
+// param names (api/candles.js accepts pool|poolAddress and
+// token|tokenAddress|address), any param order, and case-insensitive 0x-hex
+// addresses (api/_onchain.js addressesEqual). Fold all of those into the
+// cache/dedupe key so semantically identical requests share one cache entry
+// and one in-flight upstream call. Only the KEY is normalized — the request
+// forwarded upstream keeps its verbatim query string.
+const CANDLES_PARAM_ALIASES = new Map([
+  ["poolAddress", "pool"],
+  ["tokenAddress", "token"],
+  ["address", "token"],
+]);
+const ADDRESS_PARAMS = new Set(["address", "pool", "token"]);
+const HEX_ADDRESS_RE = /^0x[0-9a-fA-F]+$/;
+
+function cacheKey(req, url) {
+  const aliases = url.pathname === "/api/candles" ? CANDLES_PARAM_ALIASES : null;
+  const parts = [];
+  for (const [rawName, rawValue] of url.searchParams) {
+    const name = (aliases && aliases.get(rawName)) || rawName;
+    const value = ADDRESS_PARAMS.has(name) && HEX_ADDRESS_RE.test(rawValue)
+      ? rawValue.toLowerCase()
+      : rawValue;
+    // Re-encode the DECODED name/value: a literal "&"/"=" inside a value must
+    // not read as a param delimiter in the key, or an attacker could craft a
+    // request whose (negative-cached) key collides with a victim's valid one.
+    parts.push(`${encodeURIComponent(name)}=${encodeURIComponent(value)}`);
+  }
+  parts.sort();
+  return `${req.method}:${url.pathname}?${parts.join("&")}`;
 }
 
 const EDGE_API_HANDLERS = new Map([
@@ -49,13 +92,59 @@ const EDGE_API_HANDLERS = new Map([
 // when the call settles either way: a failed fetch must not be memoized.
 const inflight = new Map();
 
+// LAST hop of x-forwarded-for, else the socket address: the last hop is the
+// one appended by the trusted Railway edge, while earlier hops are client-
+// supplied and would let anyone rotate fake values past the rate limits
+// (rate limiting only, held in memory — never stored).
+function clientIp(req) {
+  const hops = String(req.headers["x-forwarded-for"] || "").split(",").map(h => h.trim()).filter(Boolean);
+  return hops[hops.length - 1] || req.socket?.remoteAddress || "unknown";
+}
+
+// ── per-IP rate limit for the GeckoTerminal proxy endpoints ──────────────────
+// Same sliding-window/sweep shape as api/plans.js rateLimited. The budget is
+// generous for honest use (a scan costs ~2 requests, and repeat views are
+// cache hits, which are free) while capping how fast any one client can burn
+// the shared upstream quota. /api/coins stays outside this limiter — the
+// classic surface polls it every 30 seconds per open tab.
+const RATE_LIMITED_PATHS = new Set(["/api/token", "/api/candles"]);
+const RATE_LIMIT_MAX = 60; // requests per IP…
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // …per minute, across both paths
+// Past this many keys, each check also sweeps fully-expired IPs so the map is
+// bounded by active traffic, not by every IP ever seen (see api/plans.js).
+const RATE_SWEEP_THRESHOLD = 512;
+const rateLog = new Map(); // ip -> [timestamps] — memory only, never persisted
+
+function sweepRateLog(cutoff) {
+  for (const [key, ts] of rateLog) {
+    const live = ts.filter(t => t > cutoff);
+    if (live.length === 0) rateLog.delete(key);
+    else if (live.length < ts.length) rateLog.set(key, live);
+  }
+}
+
+// Returns 0 when the request is allowed (and records it), otherwise the
+// number of seconds until a slot frees up (for the Retry-After header).
+function rateLimitRetryAfter(ip, now = Date.now()) {
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  if (rateLog.size > RATE_SWEEP_THRESHOLD) sweepRateLog(cutoff);
+  const hits = (rateLog.get(ip) || []).filter(t => t > cutoff);
+  if (hits.length >= RATE_LIMIT_MAX) {
+    rateLog.set(ip, hits);
+    return Math.max(1, Math.ceil((hits[0] + RATE_LIMIT_WINDOW_MS - now) / 1000));
+  }
+  hits.push(now);
+  rateLog.set(ip, hits);
+  return 0;
+}
+
 async function fetchApi(req, url, key, handler) {
   const request = new Request(`http://localhost${url.pathname}${url.search}`, { method: req.method, headers: req.headers });
   const response = await handler(request);
   const body = Buffer.from(await response.arrayBuffer());
   const headers = {};
   response.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
-  const ttl = response.status === 200 ? cacheTtlMs(headers) : 0;
+  const ttl = response.status === 200 ? cacheTtlMs(headers) : NEGATIVE_TTL_MS;
   if (req.method === "GET" && ttl > 0) {
     if (apiCache.size >= MAX_CACHE_ENTRIES) {
       const oldest = apiCache.keys().next().value;
@@ -67,12 +156,29 @@ async function fetchApi(req, url, key, handler) {
 }
 
 async function serveApi(req, res, url, handler) {
-  const key = `${req.method}:${url.pathname}${url.search}`;
+  const key = cacheKey(req, url);
   const hit = apiCache.get(key);
   if (req.method === "GET" && hit && hit.expires > Date.now()) {
     res.writeHead(hit.status, { ...hit.headers, "x-cmvng-cache": "hit" });
     res.end(hit.body);
     return;
+  }
+  // Cache hits above are free; only requests that reach a handler (and may
+  // reach GeckoTerminal) spend rate-limit budget. The error body matches
+  // api/_onchain.js errorResponse so clients handle it like any API error.
+  if (RATE_LIMITED_PATHS.has(url.pathname)) {
+    const retryAfter = rateLimitRetryAfter(clientIp(req));
+    if (retryAfter > 0) {
+      res.writeHead(429, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Retry-After": String(retryAfter),
+      });
+      res.end(JSON.stringify({
+        error: { code: "RATE_LIMITED", message: "Too many market-data requests from this connection. Try again shortly." },
+      }));
+      return;
+    }
   }
   let pending = inflight.get(key);
   if (!pending) {
@@ -115,12 +221,7 @@ async function servePlans(req, res, url) {
     res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
     res.end(JSON.stringify(body));
   };
-  // LAST hop of x-forwarded-for, else the socket address: the last hop is the
-  // one appended by the trusted Railway edge, while earlier hops are client-
-  // supplied and would let anyone rotate fake values past the rate limit
-  // (rate limiting only, held in memory — never stored)
-  const hops = String(req.headers["x-forwarded-for"] || "").split(",").map(h => h.trim()).filter(Boolean);
-  const ip = hops[hops.length - 1] || req.socket?.remoteAddress || "unknown";
+  const ip = clientIp(req);
   // revocation capability travels in a header — query strings land in logs
   const token = typeof req.headers["x-cmvng-owner-token"] === "string" ? req.headers["x-cmvng-owner-token"] : null;
   let body = null;
@@ -177,17 +278,27 @@ async function serveStatic(res, pathname) {
   }
 }
 
-http.createServer(async (req, res) => {
-  try {
-    const url = new URL(req.url, "http://localhost");
-    const edgeHandler = EDGE_API_HANDLERS.get(url.pathname);
-    if (edgeHandler) return await serveApi(req, res, url, edgeHandler);
-    if (url.pathname === "/api/plans") return await servePlans(req, res, url);
-    if (url.pathname === "/healthz") { res.writeHead(200); return res.end("ok"); }
-    return await serveStatic(res, url.pathname);
-  } catch (e) {
-    console.error("Server error:", e.message);
-    res.writeHead(500, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Server error" }));
-  }
-}).listen(PORT, () => console.log(`CMVNG DCA Simulator listening on :${PORT}`));
+// Exported so server.test.js can run the real request pipeline in-process
+// (with a stubbed globalThis.fetch standing in for the upstream providers).
+export function createApiServer() {
+  return http.createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url, "http://localhost");
+      const edgeHandler = EDGE_API_HANDLERS.get(url.pathname);
+      if (edgeHandler) return await serveApi(req, res, url, edgeHandler);
+      if (url.pathname === "/api/plans") return await servePlans(req, res, url);
+      if (url.pathname === "/healthz") { res.writeHead(200); return res.end("ok"); }
+      return await serveStatic(res, url.pathname);
+    } catch (e) {
+      console.error("Server error:", e.message);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Server error" }));
+    }
+  });
+}
+
+// Listen only when run directly (node server.js) — never on import.
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  createApiServer().listen(PORT, () => console.log(`CMVNG DCA Simulator listening on :${PORT}`));
+}
