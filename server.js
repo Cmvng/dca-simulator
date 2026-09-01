@@ -8,7 +8,9 @@ import http from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import handler from "./api/coins.js";
+import coinsHandler from "./api/coins.js";
+import tokenHandler from "./api/token.js";
+import candlesHandler from "./api/candles.js";
 import { handlePlansRequest } from "./api/plans.js";
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -36,19 +38,25 @@ function cacheTtlMs(headers) {
   return m ? Number(m[1]) * 1000 : 0;
 }
 
+const EDGE_API_HANDLERS = new Map([
+  ["/api/coins", coinsHandler],
+  ["/api/token", tokenHandler],
+  ["/api/candles", candlesHandler],
+]);
+
 // key -> Promise — concurrent cache misses for the same key share ONE
-// upstream call instead of stampeding CoinGecko. Entries are removed when the
-// call settles either way: a failed fetch must not be memoized.
+// upstream call instead of stampeding the data providers. Entries are removed
+// when the call settles either way: a failed fetch must not be memoized.
 const inflight = new Map();
 
-async function fetchApi(key, method) {
-  const request = new Request(`http://localhost${key}`, { method });
+async function fetchApi(req, url, key, handler) {
+  const request = new Request(`http://localhost${url.pathname}${url.search}`, { method: req.method, headers: req.headers });
   const response = await handler(request);
   const body = Buffer.from(await response.arrayBuffer());
   const headers = {};
   response.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
   const ttl = response.status === 200 ? cacheTtlMs(headers) : 0;
-  if (ttl > 0) {
+  if (req.method === "GET" && ttl > 0) {
     if (apiCache.size >= MAX_CACHE_ENTRIES) {
       const oldest = apiCache.keys().next().value;
       apiCache.delete(oldest);
@@ -58,17 +66,17 @@ async function fetchApi(key, method) {
   return { body, headers, status: response.status };
 }
 
-async function serveApi(req, res, url) {
-  const key = url.pathname + url.search;
+async function serveApi(req, res, url, handler) {
+  const key = `${req.method}:${url.pathname}${url.search}`;
   const hit = apiCache.get(key);
-  if (hit && hit.expires > Date.now()) {
+  if (req.method === "GET" && hit && hit.expires > Date.now()) {
     res.writeHead(hit.status, { ...hit.headers, "x-cmvng-cache": "hit" });
     res.end(hit.body);
     return;
   }
   let pending = inflight.get(key);
   if (!pending) {
-    pending = fetchApi(key, req.method).finally(() => inflight.delete(key));
+    pending = fetchApi(req, url, key, handler).finally(() => inflight.delete(key));
     inflight.set(key, pending);
   }
   const out = await pending;
@@ -172,7 +180,8 @@ async function serveStatic(res, pathname) {
 http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://localhost");
-    if (url.pathname === "/api/coins") return await serveApi(req, res, url);
+    const edgeHandler = EDGE_API_HANDLERS.get(url.pathname);
+    if (edgeHandler) return await serveApi(req, res, url, edgeHandler);
     if (url.pathname === "/api/plans") return await servePlans(req, res, url);
     if (url.pathname === "/healthz") { res.writeHead(200); return res.end("ok"); }
     return await serveStatic(res, url.pathname);

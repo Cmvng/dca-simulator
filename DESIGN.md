@@ -25,7 +25,7 @@ NOT taken: its darkness. CMVNG is light.
 --blue      #2E6BF0  primary actions, key highlights, target marker
 --blue-press#2559D0  pressed/active
 --blue-soft #DBE7FE  accent-tint backgrounds (pills, chips, delta badge)
---blue-ring rgba(46,107,240,0.16) focus ring
+--blue-ring #2E6BF0  accessible focus outline; 16% blue may be an outer halo only
 --up        #12B76A  gain figures only
 --down      #F0442E  loss figures only
 ```
@@ -62,6 +62,15 @@ Slightly empty is correct. Backdrop always clean --bg.
 4. **Two-up stat cards** — paired big stats (avg entry · vs lump sum) in
    white rounded cards.
 
+## Onchain chart exception
+
+The `/contract` screen follows CLEAR BLUE for its shell, controls, metrics,
+warnings, and plan cards. Its embedded candlestick instrument may use a dark
+navy canvas to match familiar trading-chart contrast and the owner's Fomo-style
+reference. This exception is limited to the chart component: blue marks buy and
+goal references, semantic green/red mark up/down and invalidation, and no
+purple, cyan, gold, gradients, or fabricated future candles are allowed.
+
 ## Brand assets
 **Logo**: blue offset-bars mark + lowercase "cmvng" wordmark. Header: mark
 (bars) small top-left, dark-ink wordmark on bg/white. Clear space = bar
@@ -89,7 +98,8 @@ clip, profit-sign color rule, exact dimensions). Clean and friendly.
 
 ## Accessibility
 Never meaning by color alone (bars carry labels + values; gain/loss carry
-+/− signs). Focus = --blue-ring outline. Semantic buttons, real labels,
++/− signs). Focus = solid --blue-ring outline with at least 3:1 contrast; a
+soft halo cannot be the only indicator. Semantic buttons, real labels,
 aria; charts get aria-label + stat-number text fallback. --ink on bg/white
 and white on --blue pass AA.
 

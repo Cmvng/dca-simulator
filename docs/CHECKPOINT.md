@@ -1,153 +1,103 @@
 # CHECKPOINT — CMVNG DCA Simulator
 
-> Snapshot of where the project stands right now. Update this file whenever a work session ends,
-> so the next session (human or AI) can resume instantly.
+> Current working state. Update this file at the end of each implementation session.
 
-**Date:** 2026-08-27 (v2 upgrade session + INSTRUMENT redesign run)
-**Branch state:** `feat/cmvng-v2-upgrade` — v2 features + the INSTRUMENT design system
-(branched from `claude/project-docs-checkpoint-ywkwop`; not merged to `main`, no PR, NOT deployed
-from this branch — the Railway deploy tracks the older branch).
-**Model version:** CMVNG Simulation v2.0.0 (`src/lib/version.js`) — unchanged by the redesign;
-the engine is frozen and guarded by `behaviorLock.test.js` + the v1 oracle (31 tests).
+**Date:** 2026-08-30
 
----
+**Working branch:** `codex/contract-plan-studio`
 
-## ✅ What is DONE and working (v2)
+**Working base:** `b0f5b554d622256763550fd7fbf61a3f2f0c7750`
 
-**Foundation (P0)**
-- [x] `App.jsx` (was ~1,030 lines) refactored into `components/` + `hooks/` + `lib/` + `services/`
-- [x] Pure, tested simulation engine in `src/lib/simulation/` — **30/30 tests pass** (`npm test`),
-  including a v1-equivalence oracle (verbatim copy of old `runSim`/`analyzeMarket` compared
-  against the new engine) and invariant tests (capital conservation, monotone units, no NaN…)
-- [x] Loading skeletons/progress, human-readable error states with retry, staleness labels
-- [x] Data-quality gate (`validate.js`) — never silently simulates bad data
-- [x] Accessibility pass (labels, roles, aria, focus-visible, prefers-reduced-motion)
-- [x] Mobile-first verified via Playwright at 320/375/390/1280px — no horizontal overflow
+**Production baseline:** Simple scheduled DCA with chart-base hardening, [PR #7](https://github.com/Cmvng/dca-simulator/pull/7) at `dd24717efac45163e78aa8ae17aac4fb1e11fd05`; Railway deployment `a5d32f46-606d-4fec-bcc6-e2ee49b9e284` was `SUCCESS`
 
-**Core product (P1)**
-- [x] Results page in the Phase-56 hierarchy (plan → market → outcome → scenarios → reality
-  check → robustness → comparison → conditions → risk → chart → timeline → share → methodology)
-- [x] Interactive SVG portfolio chart (hover/touch tooltips, dual axes, purchase markers)
-- [x] Collapsible auditable purchase timeline table
-- [x] DCA vs Hybrid vs Lump Sum (same capital, same evaluation price)
-- [x] Fees (% + fixed per purchase) and slippage assumption under Advanced options
-- [x] Target price card, break-even ladder (0/10/25/50/100% ROI), max simulated drawdown
+**Current redesign status:** merged and deployed to [web-production-84b5c.up.railway.app](https://web-production-84b5c.up.railway.app)
 
-**Differentiation (P2)**
-- [x] Reality Check (deterministic thresholds: typical = median |move| over plan-length windows;
-  Modest ≤ typical, Moderate ≤ 2×typical, Ambitious ≤ largest observed gain, else Extreme)
-- [x] Rolling windows: plan re-run over every completed plan-length window in the past year
-  (real prices) → best/median/worst + count; labeled "historical outcomes, not probabilities"
-- [x] Explainable Market Conditions + "CMVNG Model Score (heuristic)" labeling + how-calculated
-- [x] "How CMVNG calculates this" methodology panel (8 sections + limitations)
+**Core model:** CMVNG Simulation v3.0.0 remains behavior-locked
+**Contract methodology:** Scheduled DCA simulation schema v1 under `src/lib/onchain/scheduledDca.js`
 
-**Growth (P3)**
-- [x] Share cards in 3 formats: X 1200×675 (v1 layout preserved), square 1080×1080, story 1080×1920
-- [x] Shareable plan URLs (`#p=<base64url>` — config only, validated on decode, no personal data)
-- [x] X intent / copy link / native share; post-share "create another plan / compare another coin"
-- [x] Analytics event layer (`lib/analytics.js`) — forwards to plausible/gtag when present,
-  no-op otherwise; funnel events wired (coin_selected, simulation_started/completed, share…)
+## Outcome
 
-**Retention (P4)**
-- [x] Saved plans (localStorage, max 30) storing config + headline + **model version** + seed
-- [x] Live tracking: plan vs reality using real prices since activation (schedule-following
-  approximation, labeled)
+The `/contract` experience has been rebuilt around the owner’s clarified product: one understandable scheduled-DCA flow rather than a technical four-zone ladder.
 
-**Advanced (P5)**
-- [x] Historical backtest mode (real prices/dates, no scaling; incl. DCA-vs-lump for the period)
-- [x] Hybrid strategy calculation (0–90% upfront; tested: 0%≡DCA, 100%≡lump)
-- [x] Monte Carlo distribution mode (10,000 paths, bootstrap of historical daily returns,
-  deterministic seed, percentiles + "model-based estimate" share above target, methodology+limits)
-- [x] "What if I wait for a dip?" experiment (labeled as arithmetic, not a strategy)
+The current primary path is:
 
-**API / infra**
-- [x] `api/coins.js`: history 120d→365d, `fetchedAt` in payloads, 429 pass-through with
-  Retry-After, structured per-invocation logging, dead code removed
-- [x] Vite dev middleware serves `/api/coins` locally (v1's "API 404 in dev" gap fixed)
-- [x] `npm test` (node:test, zero new prod deps), `.gitignore`, SEO/OG meta + noscript in index.html
+**contract address → measured volatility → amount/frequency/duration/target → one simulated chart → plain summary → share card**
 
-## ✔ Validation performed this session
+The former Deep pullback/Balanced/Early entry selector, `B1`–`B4` price-zone rail, `S1`/`X1` outcome grid, timeframe toolbar, and retrospective-touch controls are no longer part of the primary UI. The old ladder code remains in the repository only as a possible future advanced strategy; it is not mixed into the scheduled plan.
 
-- `npm test` → 30/30 pass · `npm run build` → clean (main bundle 73KB gzip; share/backtest/
-  monte-carlo/saved-plans lazy-loaded) · Playwright smoke: 13/13 steps, zero console errors,
-  full-page visual QA at desktop + mobile
+## Delivered in the simple scheduled-DCA redesign
 
-## 🐛 Known issues / conscious limitations
+- Exact contract and pool resolution is preserved, including deterministic strongest-pool selection, alternative exact pools, canonical token identity, request cancellation, and stale-response protection.
+- The resolved token header now surfaces price, MCAP, FDV, and one plain volatility result: category plus measured typical daily swing.
+- One four-field builder asks for:
+  - total USD amount;
+  - buy frequency;
+  - whole-day duration from 7 through 90 days;
+  - profit target from the simulated average buy.
+- Five cadences are available: **every hour**, **every 6 hours**, **every 12 hours**, **every day**, and **every week**.
+- Evidence resolution is chosen automatically from cadence: `1H` for 1-hour/6-hour buying, `4H` for 12-hour/daily buying, and `1D` for weekly buying. The evidence interval is not presented as a second “buy frequency.”
+- The schedule is exact and end-exclusive. The first intended buy occurs at the start time; later buys are exactly one cadence apart; the end timestamp is excluded.
+- There is no hidden purchase-count cap. A 90-day hourly plan produces all 2,160 intended purchases instead of silently clamping to the established simulator’s legacy 180-entry limit.
+- Budget allocation uses integer cents and conserves the exact total. A plan is blocked when its budget cannot allocate at least one cent per intended purchase.
+- Recent volatility uses close-to-close realized log returns, square-root-of-time normalization, a plain category, and an actual typical-daily-swing measure. “Stable-like” is behavior language, not token classification or a peg guarantee.
+- One seeded sample bootstraps centered historical return/wick shapes, scales them to the measured volatility, and anchors the first candle to the current pool quote. It is reproducible for the same token/data/inputs and explicitly marked illustrative, synthetic, and `forecast: false`.
+- The new `ScheduledDcaChart` combines muted real-history context with bright illustrative candles and shows:
+  - grouped green `B` markers for simulated scheduled purchases;
+  - a moving weighted-average entry line;
+  - a moving orange conditional target-close line;
+  - a moving red conditional risk-review line;
+  - an orange target or red review marker only if this sample reaches the corresponding close condition.
+- Dense schedules are grouped into at most 48 visual buy markers without changing the exact schedule or arithmetic. An accessible buy table and clear `B×n` semantics preserve the underlying count.
+- Average entry, target, and review levels recompute after every simulated buy. A qualifying sample close stops later simulated buys and preserves unused budget; it does not model or imply an executed sale, stop order, or guaranteed fill.
+- The target is the chosen percentage above the running simulated average. The risk-review floor is one chosen-duration realized-volatility move below the running average, bounded to a 3%–90% buffer.
+- Price is the source series. MCAP and FDV are implied using the provider’s current price-to-valuation ratio, carry a constant-ratio/supply disclosure, and fall back to Price when the requested valuation is unavailable.
+- `ScheduledPlanSummary` gives one compact answer: buys and amount per buy, duration/cadence, volatility and illustrative range, target level, review level, and whether either level was reached in this sample.
+- The share flow now exports scheduled-plan square/story cards with amount, cadence, duration, planned count, amount per buy, volatility, target, review, exact token/pool provenance, timestamps, and prominent simulation/not-forecast copy.
+- Address, pool, amount, duration, frequency, target, value unit, and automatically selected evidence interval persist in the query string. Legacy `plan` and `touches` parameters are removed from new URLs.
+- Pool selection, evidence metrics, methodology, warnings, safety limits, and modeling assumptions are consolidated under one collapsed technical-details section.
+- The scheduled chart retains a visible TradingView copyright/link and accessible chart/buy descriptions.
+- The established `/`, `/plan/<id>`, and `#p=` flows remain isolated from the lazy-loaded `/contract` redesign.
 
-- [ ] Engine uses floats (v1 parity requirement), not integer cents — covered by invariant tests
-- [ ] v1's legacy `flatVal` field = capital (v1 approximation, kept for the oracle test);
-  the visible Flat scenario computes precisely (units × unchanged price)
-- [ ] "Trending" quick filter = biggest 24h movers (no CoinGecko trending endpoint via proxy)
-- [ ] Tracking approximates executions with daily closes (labeled in UI)
-- [ ] Share URL is hash-encoded config; server-stored short links (`/plan/<id>`) need a DB
-- [ ] No SSR/prerendered SEO landing pages (SPA); meta/OG tags + noscript only
-- [ ] No ESLint config yet; no CI workflow
-- [ ] Edge-cache hit/miss ratio not measurable from the function itself (hits never invoke it) —
-  invocations are logged as effective misses
+## Model boundaries
 
-## 🎯 Suggested next steps
+- Muted history candles are provider data. Bright future candles are one seeded volatility illustration, not historical data and not a forecast.
+- The centered bootstrap does not preserve historical trend, return autocorrelation, or volatility clustering and does not span every possible tail outcome.
+- `TARGET CLOSE` and `RISK REVIEW` are conditional simulation events. They stop later simulated buys only; neither executes or models a sale.
+- Fees, gas, token taxes, slippage, price impact, failed transactions, changing liquidity, and supply changes are excluded.
+- Market-data quality is not contract-security evidence. Honeypot, sellability, authority, holder, deployer, and LP-lock risk remain unknown.
+- Price/MCAP/FDV projections must not be described as interchangeable. MCAP and FDV are implied only when their own provider values exist.
 
-1. Merge/PR this branch after review; deploy preview on Vercel and sanity-check `/api/coins`
-   with real CoinGecko data (365d payload size, rate limits)
-2. CI: GitHub Action for `npm test` + `npm run build`
-3. Server-stored share pages (`/plan/<id>`) — needs KV/DB decision
-4. Real SEO landing pages (per-coin calculators) — needs prerendering strategy
-5. ESLint + formatting config
+## Verification completed
 
-## 🔑 Context needed to resume
+- [x] `npm run lint` — zero warnings/errors
+- [x] `npm test` — 100/100 tests pass
+- [x] Scheduled-DCA tests cover all five cadences, exact end-exclusive counts, the 2,160-buy hourly/90-day case, exact-cent conservation, invalid/zero-cent schedules, deterministic seeds, finite extreme-price handling, moving target/review levels, target/review terminal events, stable-like caveats, valuation projections, and inherited market-data gates
+- [x] Share-card tests cover scheduled-plan model normalization and render fallbacks
+- [x] `npm run build`
+- [x] `git diff --check`
+- [x] The onchain browser smoke code now covers the simple source order, five cadences, Price/MCAP/FDV, amount/frequency/duration/target URL persistence, plan-card generation, 320px/390px layout checks, reload restoration, and rapid cadence changes
+- [x] [PR #6](https://github.com/Cmvng/dca-simulator/pull/6) merged at `c957777e9ab9bc7a9963c8eb792ba7a5a54a3cfd`
+- [x] Railway deployment `d82b8a50-10ec-43b6-8f35-f128bbdedf73` reached `SUCCESS`
+- [x] Live STONK acceptance confirmed the resolved token and volatility, all four plan inputs, all five cadence choices, one scheduled chart, Price/MCAP/FDV modes, grouped `B` markers, moving average entry, target-close and risk-review references, compact summary, plan-card section, and collapsed technical disclosure
+- [x] Live reload preserved amount `$123.45`, 6-hour cadence, 7-day duration, 50% target, derived `1H` evidence interval, and 28 scheduled buys
+- [x] Price, FDV, and MCAP selections persisted; card generation produced the STONK scheduled-DCA PNG preview with **Download PNG** and **Copy live link** actions
+- [x] Live console review exposed Lightweight Charts `unexpected base`; [PR #7](https://github.com/Cmvng/dca-simulator/pull/7) fixed it with an explicit `1e18` price-format base and added a smoke regression
+- [x] PR #7 merged at `dd24717efac45163e78aa8ae17aac4fb1e11fd05`; Railway deployment `a5d32f46-606d-4fec-bcc6-e2ee49b9e284` reached `SUCCESS`
+- [x] Fresh-tab retesting of Price, FDV, and MCAP produced zero app-origin console errors; the root route also loaded with zero app-origin errors
+- [ ] Local browser smoke execution — code is ready, but this environment has no usable Chromium binary. Equivalent deployed-flow acceptance passed in a live browser
 
-- Deploy target Vercel; env `COINGECKO_API_KEY` optional. **Do not deploy from this branch
-  without the owner's go-ahead** (spec said "do not deploy").
-- `npm run dev` now serves the API locally via vite middleware — `vercel dev` no longer required.
-- The v1 methodology is intentionally preserved; changing any calculation requires bumping
-  `MODEL_VERSION` and keeping the oracle test honest (update it consciously, never casually).
+## Known gaps after release
 
+- Run the updated contract smoke in an environment with Chromium and inspect the 320px/390px screenshots.
+- Review the seeded-sample copy and chart visually on both a stable-like token and another extreme-volatility memecoin.
+- The contract route still has no honeypot/sellability/tax/authority/holder/LP scan and no executable buy/sell quote.
+- Arbitrary-address endpoints still need per-IP throttling, in-flight request coalescing, and stronger shared caching before public scale.
+- Cross-pool and cross-provider quote divergence are not yet blocking rules.
+- A single seeded sample is not a success rate or probability. No predictive confidence, win rate, or expected return should be published without strict out-of-sample validation.
 
----
+## Next handoff
 
-## INSTRUMENT redesign run (same day, staged with verification gates)
-
-- Gate 0: read-only Inspector subagent produced an architecture map; orchestrator spot-checked
-  quotes against source. Gate 1: ESLint (flat config) clean baseline, behavior-lock test freezing
-  exact engine outputs, Playwright smoke harness committed (tools/smoke.mjs).
-- Gates 2-5: full visual rebuild to DESIGN.md ("INSTRUMENT"): ink/paper/line + one blue family +
-  semantic P/L only; hairline sections; mono whisper labels; tabular figures; hero numeral with
-  one-shot count-up; signature components ScenarioRuler (outcome ruler), BuyBarcode, restyled
-  price path; spec-sheet rows; the single permitted pill (Reality Check verdict); flat black
-  primary bar; no gradients/shadows/pills/emoji; weights 400/500; sentence case.
-- New since the morning session: keyboard-navigable coin combobox, btc/eth/sol/xrp quick picks,
-  share cards rebuilt in 3 formats x 3 contents (plan / reality check / dca-vs-lump) with a
-  content picker, AssumptionsDrawer on both result modes, Methodology now also on backtest,
-  docs/PUBLIC_PLANS.md (/plan/<id> architecture), security-audit greps clean.
-- Every gate ran build + lint + 31/31 tests + 13/13 smoke; final QA: zero horizontal overflow at
-  320/360/390/430/768/1024/1440, no console errors, bundle ~73.7KB gzip main + lazy chunks.
-
----
-
-## CLEAR BLUE finishing run (same day; branch feat/cmvng-clear-blue → merged)
-
-- Full re-skin to DESIGN.md "CLEAR BLUE" (instrument look retired): #EEF3FA
-  backdrop, floating white cards, Plus Jakarta Sans 400-700, pill chips, one
-  #2E6BF0 accent, hero numeral + delta badge, scenario stress-test bars
-  (loss/amber/flat/blue-target/green-upside), three-cell robustness, mascot
-  placeholder asset used only in empty states / share-card avatar + corner.
-- Remaining work closed: /plan/<id> public pages IMPLEMENTED (see
-  docs/PUBLIC_PLANS.md — one config step: PLANS_DIR=/data + volume);
-  GitHub Actions CI (lint+test+build); legacy theme bridge removed;
-  integer-money raised as docs/MCR-001 (open, engine unchanged);
-  performance measured (localhost preview): LCP 136ms, interactive ~151ms,
-  card generation 353ms, simulate→chart 1.43s (~1.2s deliberate staging).
-- Tests now 40/40 (31 + 9 plan-store); gates A/B/C all green (lint, tests,
-  build, 13/13 smoke, public-plan lifecycle e2e, 320-1440px no overflow).
-
----
-
-## MCR-001 implemented (2026-08-27, owner-approved) — MODEL v3.0.0
-
-Integer-minor-unit money: capital split to the cent (remainder to the earliest
-purchases — sums are exact by construction), fees rounded to the cent and
-clamped per purchase, money outputs cent-quantized; units/prices continuous;
-Monte Carlo intentionally unchanged (statistical mode). behaviorLock recaptured
-under v3 (v2 constants at commit 040e560); v1 oracle now asserts a documented
-money-quantization tolerance. New saved plans stamp v3; old plans keep v2.
-Suite 41/41, lint clean, build green, 13/13 smoke, plans e2e 4/4.
+1. Run `npm run smoke:onchain` with a supported Chromium binary and resolve any visual/runtime failures.
+2. Extend production acceptance to a stable-like token plus 7-day and 90-day boundary schedules.
+3. Keep the P0 security and executable-quote integrations in `docs/RECOMMENDATIONS.md` as requirements before any trade-ready CTA.
+4. Treat the old B1–B4 price-zone profiles only as a separately labelled future advanced mode, never as part of the primary scheduled-DCA result.
