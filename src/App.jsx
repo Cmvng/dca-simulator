@@ -67,6 +67,8 @@ export default function App() {
   const publicMode = !!(publicRecord && typeof publicRecord === "object");
 
   const shareRef = useRef(null);
+  const resultsRef = useRef(null);
+  const prevSimState = useRef(simApi.simState);
   const freq = getFreq(freqId);
   const maxMo = freq.maxMonths;
   const safeMo = Math.min(months, maxMo);
@@ -156,6 +158,18 @@ export default function App() {
   }, [publicMode, selected, market.history, simApi, config]);
 
 
+  // Bring fresh results into view — only on the running→done transition
+  // (never on remounts/re-renders) and never on /plan/<id> auto-runs.
+  useEffect(() => {
+    const prev = prevSimState.current;
+    prevSimState.current = simApi.simState;
+    if (publicMode || prev !== "running" || simApi.simState !== "done") return;
+    resultsRef.current?.scrollIntoView({
+      block: "start",
+      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
+  }, [simApi.simState, publicMode]);
+
   const backtestOffsetDays = backtestOffsetMonths * 30;
   const maxHistoryDays = market.history?.prices?.length || 0;
   const backtestOptions = useMemo(() => {
@@ -229,6 +243,7 @@ export default function App() {
       {showSticky && (
         <div style={{
           position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100,
+          maxWidth: 640, margin: "0 auto",
           background: T.card, borderRadius: "20px 20px 0 0",
           boxShadow: "0 -10px 30px -14px rgba(30,60,120,0.35)",
           padding: "12px 16px", display: "flex", gap: 10, alignItems: "stretch",
@@ -379,8 +394,8 @@ export default function App() {
         </Section>
         )}
 
-        {/* simulate — the primary action */}
-        {!publicMode && selected && market.history && (
+        {/* simulate — the primary action, always visible so step 2 never dead-ends */}
+        {!publicMode && (
           <div style={{ margin: "22px 0 4px" }}>
             <button onClick={handleSim} disabled={!canSimulate} style={{
               ...btnPrimary,
@@ -393,12 +408,22 @@ export default function App() {
                   ? "Recalculate"
                   : mode === "backtest" ? "Run historical backtest" : "Show me the numbers"}
             </button>
+            {!selected ? (
+              <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 500, color: T.ink3, marginTop: 8, textAlign: "center" }}>
+                Pick a coin above to unlock your simulation.
+              </div>
+            ) : !market.history && !market.histError ? (
+              <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 500, color: T.ink3, marginTop: 8, textAlign: "center" }}>
+                Loading market data…
+              </div>
+            ) : null}
           </div>
         )}
 
         {simApi.simError && <ErrorState message={simApi.simError} onRetry={handleSim} />}
 
-        {/* results */}
+        {/* results — resultsRef is the scroll target after a run completes */}
+        <div ref={resultsRef}>
         {simApi.simState === "done" && mode === "scenario" && simView && selected && market.analysis && (
           <ResultsView
             sim={simView} selected={selected} analysis={market.analysis}
@@ -425,6 +450,7 @@ export default function App() {
             <Methodology mode="backtest" />
           </Suspense>
         )}
+        </div>
 
         <footer style={{ marginTop: 32, paddingBottom: 8, textAlign: "center", fontFamily: SANS, fontSize: 12, fontWeight: 500, color: T.ink3 }}>
           Scenario simulator · Not financial advice · DYOR · Data via CoinGecko · cmvng

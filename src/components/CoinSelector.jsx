@@ -118,7 +118,7 @@ export default function CoinSelector({ coins, selected, onSelect, market }) {
           onKeyDown={onKeyDown}
           onFocus={e => { e.target.style.borderColor = T.blue; setDropOpen(true); }}
           onBlur={e => { e.target.style.borderColor = T.line; setTimeout(() => setDropOpen(false), 180); }}
-          placeholder="Search by name or ticker… (250 coins)"
+          placeholder="Search 250 coins…"
         />
         {selected && (
           <div style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }}>

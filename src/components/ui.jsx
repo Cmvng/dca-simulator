@@ -3,6 +3,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { T, SANS, card, monoLabel, monoFigure, plColor, pillSoft, pillFilled } from "../styles/theme.js";
+import { timeAgo } from "../lib/formatting/dates.js";
 import mascotUrl from "../assets/mascot.svg";
 
 // section label — 12px w600 muted; pass eyebrow for the UPPERCASE variant
@@ -167,11 +168,9 @@ export function Collapsible({ title, subtitle, defaultOpen = false, children, on
 // honest staleness caption
 export function Staleness({ fetchedAt, stale }) {
   if (!fetchedAt) return null;
-  const m = Math.max(0, Math.round((Date.now() - fetchedAt) / 60000));
-  const label = m < 1 ? "just now" : `${m} min ago`;
   return (
     <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 500, color: stale ? T.ink2 : T.ink3 }}>
-      {stale ? "stale · " : ""}Updated {label}
+      {stale ? "stale · " : ""}Updated {timeAgo(fetchedAt)}
     </span>
   );
 }
