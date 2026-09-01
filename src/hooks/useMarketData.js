@@ -18,18 +18,25 @@ export function useMarketData(selected) {
   const [histError, setHistError] = useState(null);
   const [analysis, setAnalysis] = useState(null);
   const timerRef = useRef(null);
+  // Bumped whenever the selected coin changes; in-flight responses for an
+  // older generation must not write any state (wrong-coin race).
+  const genRef = useRef(0);
 
   const pollLive = useCallback(async id => {
+    const gen = genRef.current;
     setLoadingLive(true);
     const lp = await getLivePrice(id);
+    if (gen !== genRef.current) return;
     if (lp) setLive({ ...lp.data, fetchedAt: lp.fetchedAt, stale: lp.stale });
     setLoadingLive(false);
   }, []);
 
   const loadHistory = useCallback(async id => {
+    const gen = genRef.current;
     setLoadingHist(true); setHistError(null);
     try {
       const h = await getHistory(id);
+      if (gen !== genRef.current) return;
       const v = validateHistory(h.data.prices);
       if (!v.ok) {
         setHistory(null); setAnalysis(null);
@@ -41,10 +48,11 @@ export function useMarketData(selected) {
         if (v.issues.length) console.warn("History cleaned", id, v.issues);
       }
     } catch (e) {
+      if (gen !== genRef.current) return;
       setHistory(null); setAnalysis(null);
       setHistError(e.message);
     } finally {
-      setLoadingHist(false);
+      if (gen === genRef.current) setLoadingHist(false);
     }
   }, []);
 
@@ -55,7 +63,10 @@ export function useMarketData(selected) {
     pollLive(selected.id);
     timerRef.current = setInterval(() => pollLive(selected.id), POLL_MS);
     loadHistory(selected.id);
-    return () => clearInterval(timerRef.current);
+    return () => {
+      clearInterval(timerRef.current);
+      genRef.current += 1;
+    };
   }, [selected, pollLive, loadHistory]);
 
   return {

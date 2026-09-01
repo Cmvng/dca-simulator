@@ -54,7 +54,14 @@ async function fetchJson(url) {
 // Top 250 coins. Handles both v2 ({fetchedAt, coins}) and legacy (array) shapes.
 export async function getCoins() {
   const hit = cache.get("coins250", LIST_TTL);
-  if (hit) return { data: hit.d.coins, fetchedAt: hit.d.fetchedAt || hit.t, stale: false };
+  if (hit) {
+    // v1 clients cached the bare array; anything without a non-empty coins
+    // array is a miss, not a crash.
+    const d = Array.isArray(hit.d) ? { coins: hit.d, fetchedAt: hit.t } : hit.d;
+    if (Array.isArray(d?.coins) && d.coins.length > 0) {
+      return { data: d.coins, fetchedAt: d.fetchedAt || hit.t, stale: false };
+    }
+  }
   try {
     const json = await fetchJson(`${PROXY}?type=list`);
     const payload = Array.isArray(json) ? { coins: json, fetchedAt: Date.now() } : json;
@@ -76,7 +83,7 @@ export async function getCoins() {
 // Live price. Handles v2 ({fetchedAt, data:{id:{usd}}}) and legacy ({id:{usd}}).
 export async function getLivePrice(id) {
   const hit = cache.get("lp_" + id, PRICE_TTL);
-  if (hit) return { data: hit.d, fetchedAt: hit.t, stale: false };
+  if (hit && Number.isFinite(hit.d?.price)) return { data: hit.d, fetchedAt: hit.t, stale: false };
   try {
     const json = await fetchJson(`${PROXY}?type=price&id=${encodeURIComponent(id)}`);
     const body = json.data || json;
@@ -95,7 +102,7 @@ export async function getLivePrice(id) {
 // 365-day daily history.
 export async function getHistory(id) {
   const hit = cache.get("h_" + id, HISTORY_TTL);
-  if (hit) return { data: hit.d, fetchedAt: hit.d.fetchedAt || hit.t, stale: false };
+  if (hit && Array.isArray(hit.d?.prices)) return { data: hit.d, fetchedAt: hit.d.fetchedAt || hit.t, stale: false };
   try {
     const json = await fetchJson(`${PROXY}?type=history&id=${encodeURIComponent(id)}`);
     if (!Array.isArray(json.prices)) throw new ApiError("Price history came back malformed.");

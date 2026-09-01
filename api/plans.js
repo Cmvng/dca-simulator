@@ -19,6 +19,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { MODEL_VERSION } from "../src/lib/version.js";
+import { MIN_CAPITAL, MAX_CAPITAL } from "../src/lib/simulation/dca.js";
 
 // Default dir keeps dev/test usage out of the repo tree; production sets
 // PLANS_DIR explicitly (e.g. PLANS_DIR=/data on a host with a volume).
@@ -81,7 +82,8 @@ function flush() {
 // ── validation (mirrors decodePlanFromHash in src/lib/planUrl.js) ───────────
 
 const NUM_RULES = {
-  capital: [1, 1e9],
+  // engine bounds — a plan that passes here must also run for every visitor
+  capital: [MIN_CAPITAL, MAX_CAPITAL],
   months: [1, 6],
   targetPct: [1, 1000],
   feePct: [0, 10],
@@ -195,9 +197,23 @@ export function revokePlan(id, token) {
 
 // ── rate limiting (in-memory, transient — IPs never reach disk) ─────────────
 
+// Past this many keys, each call also sweeps fully-expired IPs so the map is
+// bounded by active traffic, not by every IP ever seen. No timers — sweeps
+// piggyback on calls, keeping behavior deterministic under injected clocks.
+const RATE_SWEEP_THRESHOLD = 512;
+
+function sweepRateLog(cutoff) {
+  for (const [key, ts] of rateLog) {
+    const live = ts.filter(t => t > cutoff);
+    if (live.length === 0) rateLog.delete(key);
+    else if (live.length < ts.length) rateLog.set(key, live);
+  }
+}
+
 function rateLimited(ip, now = Date.now()) {
   const key = ip || "unknown";
   const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  if (rateLog.size > RATE_SWEEP_THRESHOLD) sweepRateLog(cutoff);
   const hits = (rateLog.get(key) || []).filter(t => t > cutoff);
   if (hits.length >= RATE_LIMIT_MAX) {
     rateLog.set(key, hits);
@@ -208,13 +224,20 @@ function rateLimited(ip, now = Date.now()) {
   return false;
 }
 
+// Test hooks (same precedent as _initStore): drive the limiter with injected
+// timestamps and observe the bookkeeping map without exposing its contents.
+export const _rateLimited = rateLimited;
+export const _rateLogSize = () => rateLog.size;
+
 // ── request handler ──────────────────────────────────────────────────────────
 
-// handlePlansRequest({ method, url, body, ip }) → { status, body }.
-// The caller (server.js / vite middleware) reads the request body, extracts
-// the client IP (x-forwarded-for first hop or socket address), and writes the
-// response with no-store cache headers. `url` is a URL instance or string.
-export function handlePlansRequest({ method, url, body, ip }) {
+// handlePlansRequest({ method, url, body, ip, token }) → { status, body }.
+// The caller (server.js / vite middleware / default export) reads the request
+// body, extracts the client IP (x-forwarded-for LAST hop or socket address)
+// and the owner token (x-cmvng-owner-token header — never the query string,
+// which lands in access logs), and writes the response with no-store cache
+// headers. `url` is a URL instance or string.
+export function handlePlansRequest({ method, url, body, ip, token }) {
   const u = typeof url === "string" ? new URL(url, "http://localhost") : url;
   try {
     switch ((method || "").toUpperCase()) {
@@ -231,7 +254,7 @@ export function handlePlansRequest({ method, url, body, ip }) {
         return { status: 200, body: rec };
       }
       case "DELETE": {
-        const ok = revokePlan(u.searchParams.get("id"), u.searchParams.get("token"));
+        const ok = revokePlan(u.searchParams.get("id"), token);
         if (!ok) return { status: 404, body: { error: "Unknown plan or invalid token." } };
         return { status: 200, body: { revoked: true } };
       }
@@ -243,4 +266,46 @@ export function handlePlansRequest({ method, url, body, ip }) {
     console.error("plans store error:", e.message);
     return { status: 500, body: { error: "Plan storage failed. Try again in a moment." } };
   }
+}
+
+// ── Vercel function adapter ──────────────────────────────────────────────────
+
+const BODY_LIMIT = 16 * 1024; // matches server.js — far beyond any valid plan
+
+function jsonResponse(status, body) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+  });
+}
+
+// Web-standard Request → Response wrapper so a Vercel deploy serves /api/plans
+// the same way api/coins.js is served. Node runtime (the store needs node:fs).
+export default async function plansHandler(request) {
+  const url = new URL(request.url, "http://localhost");
+  // last x-forwarded-for hop — appended by the platform edge; earlier hops
+  // are client-supplied and spoofable
+  const hops = String(request.headers.get("x-forwarded-for") || "")
+    .split(",").map(h => h.trim()).filter(Boolean);
+  const ip = hops[hops.length - 1] || "unknown";
+  const token = request.headers.get("x-cmvng-owner-token");
+  let body = null;
+  if (request.method.toUpperCase() === "POST") {
+    let raw;
+    try {
+      raw = await request.text();
+    } catch {
+      return jsonResponse(400, { error: "Could not read request body." });
+    }
+    if (new TextEncoder().encode(raw).length > BODY_LIMIT) {
+      return jsonResponse(413, { error: "Plan config too large." });
+    }
+    try {
+      body = JSON.parse(raw || "null");
+    } catch {
+      return jsonResponse(400, { error: "Request body must be valid JSON." });
+    }
+  }
+  const out = handlePlansRequest({ method: request.method, url, body, ip, token });
+  return jsonResponse(out.status, out.body);
 }

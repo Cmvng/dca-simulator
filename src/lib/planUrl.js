@@ -3,6 +3,8 @@
 // anything personal. A recipient's browser rebuilds the simulation locally.
 // (Server-stored short links /plan/<id> would need a database — future work.)
 
+import { MIN_CAPITAL, MAX_CAPITAL } from "./simulation/dca.js";
+
 const FIELDS = ["coinId", "capital", "freqId", "months", "targetPct", "feePct", "feeFixed", "slippagePct", "hybridPct", "mode"];
 
 export function encodePlan(plan) {
@@ -26,7 +28,8 @@ export function decodePlanFromHash(hash = typeof window !== "undefined" ? window
     const out = {};
     if (typeof obj.coinId === "string" && /^[a-z0-9-]{1,64}$/.test(obj.coinId)) out.coinId = obj.coinId;
     const num = (v, min, max) => (typeof v === "number" && Number.isFinite(v) && v >= min && v <= max) ? v : undefined;
-    out.capital = num(obj.capital, 1, 1e9);
+    // engine bounds — a decoded plan below MIN_CAPITAL would fail to run
+    out.capital = num(obj.capital, MIN_CAPITAL, MAX_CAPITAL);
     out.months = num(obj.months, 1, 6);
     out.targetPct = num(obj.targetPct, 1, 1000);
     out.feePct = num(obj.feePct, 0, 10);

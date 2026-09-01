@@ -30,8 +30,9 @@ assumptions, model version, CMVNG branding, and a "build your own plan" CTA.
    - `POST /api/plans` body = validated config → `{ id, ownerToken }`,
      rate-limited per IP; reject anything outside the current validation rules.
    - `GET /api/plans?id=` → config (404 if revoked/unknown), cacheable.
-   - `DELETE /api/plans?id=&token=` → marks revoked ("allow a user to remove
-     their public plan").
+   - `DELETE /api/plans?id=` with the owner token in the `x-cmvng-owner-token`
+     header (never in the URL — URLs land in access logs) → marks revoked
+     ("allow a user to remove their public plan").
 3. **Rendering**: the SPA routes `/plan/<id>` (History API; server.js and
    Vercel already SPA-fallback unknown paths to index.html) → fetches the
    config → runs the normal simulation flow read-only, with "create your own

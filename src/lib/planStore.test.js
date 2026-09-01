@@ -6,8 +6,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  _initStore, createPlan, getPlan, revokePlan, handlePlansRequest, PlanError,
+import plansHandler, {
+  _initStore, _rateLimited, _rateLogSize,
+  createPlan, getPlan, revokePlan, handlePlansRequest, PlanError,
 } from "../../api/plans.js";
 import { MODEL_VERSION } from "./version.js";
 
@@ -47,6 +48,7 @@ test("createPlan rejects invalid configs with 400", () => {
     { ...VALID, coinId: "Bad Coin!" },       // bad coinId
     { ...VALID, coinId: undefined },         // coinId required
     { ...VALID, capital: 0 },                // below clamp
+    { ...VALID, capital: 5 },                // below the engine's MIN_CAPITAL floor
     { ...VALID, months: 7 },                 // above clamp
     { ...VALID, freqId: "hourly" },          // unknown enum
     { ...VALID, mode: "yolo" },              // unknown enum
@@ -124,10 +126,10 @@ test("handler: full POST → GET → DELETE → GET lifecycle, token hash never 
   assert.deepEqual(get.body.config, VALID);
   assert.ok(!JSON.stringify(get.body).includes("ownerTokenHash"));
 
-  const badDel = handlePlansRequest({ method: "DELETE", url: `http://localhost/api/plans?id=${id}&token=${"0".repeat(32)}`, body: null, ip: "a" });
+  const badDel = handlePlansRequest({ method: "DELETE", url: `http://localhost/api/plans?id=${id}`, body: null, ip: "a", token: "0".repeat(32) });
   assert.equal(badDel.status, 404);
 
-  const del = handlePlansRequest({ method: "DELETE", url: `http://localhost/api/plans?id=${id}&token=${ownerToken}`, body: null, ip: "a" });
+  const del = handlePlansRequest({ method: "DELETE", url: `http://localhost/api/plans?id=${id}`, body: null, ip: "a", token: ownerToken });
   assert.equal(del.status, 200);
   assert.deepEqual(del.body, { revoked: true });
 
@@ -136,4 +138,71 @@ test("handler: full POST → GET → DELETE → GET lifecycle, token hash never 
 
   const put = handlePlansRequest({ method: "PUT", url: "http://localhost/api/plans", body: null, ip: "a" });
   assert.equal(put.status, 405);
+});
+
+test("handler: a token passed only as ?token=... is ignored (404)", () => {
+  _initStore(freshDir());
+  const post = handlePlansRequest({ method: "POST", url: "http://localhost/api/plans", body: VALID, ip: "a" });
+  const { id, ownerToken } = post.body;
+  const del = handlePlansRequest({
+    method: "DELETE", url: `http://localhost/api/plans?id=${id}&token=${ownerToken}`, body: null, ip: "a",
+  });
+  assert.equal(del.status, 404, "query-string token must not revoke");
+  assert.ok(getPlan(id), "plan survives the query-string attempt");
+});
+
+test("createPlan rejects capital below the engine floor with 400", () => {
+  _initStore(freshDir());
+  assert.throws(() => createPlan({ ...VALID, capital: 5 }),
+    e => e instanceof PlanError && e.status === 400 && /capital/.test(e.message));
+});
+
+test("rate log: expired IPs are swept once the map grows past the threshold", () => {
+  _initStore(freshDir()); // clears the rate log
+  const t0 = 1_000_000_000_000;
+  const HOUR = 60 * 60 * 1000;
+  for (let i = 0; i < 600; i++) assert.equal(_rateLimited(`ip-${i}`, t0), false);
+  assert.equal(_rateLogSize(), 600);
+  assert.equal(_rateLimited("fresh-ip", t0 + HOUR + 1), false);
+  assert.equal(_rateLogSize(), 1, "all expired keys swept; only the fresh ip remains");
+});
+
+test("default export: Request → Response adapter (Vercel path)", async () => {
+  _initStore(freshDir());
+  const post = await plansHandler(new Request("http://localhost/api/plans", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": "6.6.6.6, 10.0.0.1" },
+    body: JSON.stringify(VALID),
+  }));
+  assert.equal(post.status, 201);
+  assert.equal(post.headers.get("cache-control"), "no-store");
+  const { id, ownerToken } = await post.json();
+  assert.match(id, /^[a-z0-9]{8}$/);
+
+  const get = await plansHandler(new Request(`http://localhost/api/plans?id=${id}`));
+  assert.equal(get.status, 200);
+  assert.deepEqual((await get.json()).config, VALID);
+
+  const qsDel = await plansHandler(new Request(`http://localhost/api/plans?id=${id}&token=${ownerToken}`, { method: "DELETE" }));
+  assert.equal(qsDel.status, 404, "query-string token is ignored");
+
+  const del = await plansHandler(new Request(`http://localhost/api/plans?id=${id}`, {
+    method: "DELETE",
+    headers: { "x-cmvng-owner-token": ownerToken },
+  }));
+  assert.equal(del.status, 200);
+  assert.deepEqual(await del.json(), { revoked: true });
+});
+
+test("default export: oversized body → 413 JSON, bad JSON → 400", async () => {
+  _initStore(freshDir());
+  const big = await plansHandler(new Request("http://localhost/api/plans", {
+    method: "POST", body: "x".repeat(16 * 1024 + 1),
+  }));
+  assert.equal(big.status, 413);
+  assert.match((await big.json()).error, /too large/i);
+
+  const bad = await plansHandler(new Request("http://localhost/api/plans", { method: "POST", body: "{nope" }));
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /valid JSON/i);
 });

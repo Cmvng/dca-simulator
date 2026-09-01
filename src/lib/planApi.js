@@ -114,11 +114,16 @@ export async function fetchPlan(id) {
 
 // revokePlan(id, token?) → true when removed (token defaults to the one
 // remembered at publish time; the local token is forgotten on success).
+// The token travels in a header, never the URL — query strings end up in
+// access logs and proxies, which would leak the revocation capability.
 export async function revokePlan(id, token = getToken(id)) {
   if (!token) return false;
   let res;
   try {
-    res = await fetch(`${ENDPOINT}?id=${encodeURIComponent(id)}&token=${encodeURIComponent(token)}`, { method: "DELETE" });
+    res = await fetch(`${ENDPOINT}?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "x-cmvng-owner-token": token },
+    });
   } catch {
     throw networkError();
   }

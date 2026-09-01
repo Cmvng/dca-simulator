@@ -57,7 +57,8 @@ function localPlansPlugin() {
             try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || 'null') } catch { body = undefined }
           }
           const url = new URL(req.originalUrl || req.url, 'http://localhost')
-          const out = handlePlansRequest({ method: req.method, url, body, ip: req.socket?.remoteAddress || 'local' })
+          const token = typeof req.headers['x-cmvng-owner-token'] === 'string' ? req.headers['x-cmvng-owner-token'] : null
+          const out = handlePlansRequest({ method: req.method, url, body, ip: req.socket?.remoteAddress || 'local', token })
           res.statusCode = out.status
           res.setHeader('Content-Type', 'application/json; charset=utf-8')
           res.setHeader('Cache-Control', 'no-store')

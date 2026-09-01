@@ -36,15 +36,13 @@ function cacheTtlMs(headers) {
   return m ? Number(m[1]) * 1000 : 0;
 }
 
-async function serveApi(req, res, url) {
-  const key = url.pathname + url.search;
-  const hit = apiCache.get(key);
-  if (hit && hit.expires > Date.now()) {
-    res.writeHead(hit.status, { ...hit.headers, "x-cmvng-cache": "hit" });
-    res.end(hit.body);
-    return;
-  }
-  const request = new Request(`http://localhost${key}`, { method: req.method });
+// key -> Promise — concurrent cache misses for the same key share ONE
+// upstream call instead of stampeding CoinGecko. Entries are removed when the
+// call settles either way: a failed fetch must not be memoized.
+const inflight = new Map();
+
+async function fetchApi(key, method) {
+  const request = new Request(`http://localhost${key}`, { method });
   const response = await handler(request);
   const body = Buffer.from(await response.arrayBuffer());
   const headers = {};
@@ -57,8 +55,25 @@ async function serveApi(req, res, url) {
     }
     apiCache.set(key, { body, headers, status: response.status, expires: Date.now() + ttl });
   }
-  res.writeHead(response.status, { ...headers, "x-cmvng-cache": "miss" });
-  res.end(body);
+  return { body, headers, status: response.status };
+}
+
+async function serveApi(req, res, url) {
+  const key = url.pathname + url.search;
+  const hit = apiCache.get(key);
+  if (hit && hit.expires > Date.now()) {
+    res.writeHead(hit.status, { ...hit.headers, "x-cmvng-cache": "hit" });
+    res.end(hit.body);
+    return;
+  }
+  let pending = inflight.get(key);
+  if (!pending) {
+    pending = fetchApi(key, req.method).finally(() => inflight.delete(key));
+    inflight.set(key, pending);
+  }
+  const out = await pending;
+  res.writeHead(out.status, { ...out.headers, "x-cmvng-cache": "miss" });
+  res.end(out.body);
 }
 
 // /api/plans — server-stored public plans (api/plans.js owns store + routing).
@@ -68,15 +83,20 @@ function readBody(req, limit) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
-    req.on("data", c => {
+    const onData = c => {
       size += c.length;
       if (size > limit) {
+        // stop consuming WITHOUT destroying — the socket must stay writable
+        // so the 413 response reaches the client (servePlans closes it after
+        // the response has flushed)
+        req.removeListener("data", onData);
+        req.pause();
         reject(Object.assign(new Error("Request body too large."), { status: 413 }));
-        req.destroy();
         return;
       }
       chunks.push(c);
-    });
+    };
+    req.on("data", onData);
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
@@ -87,17 +107,32 @@ async function servePlans(req, res, url) {
     res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
     res.end(JSON.stringify(body));
   };
-  // first hop of x-forwarded-for, else the socket address (rate limiting only,
-  // held in memory — never stored)
-  const fwd = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  const ip = fwd || req.socket?.remoteAddress || "unknown";
+  // LAST hop of x-forwarded-for, else the socket address: the last hop is the
+  // one appended by the trusted Railway edge, while earlier hops are client-
+  // supplied and would let anyone rotate fake values past the rate limit
+  // (rate limiting only, held in memory — never stored)
+  const hops = String(req.headers["x-forwarded-for"] || "").split(",").map(h => h.trim()).filter(Boolean);
+  const ip = hops[hops.length - 1] || req.socket?.remoteAddress || "unknown";
+  // revocation capability travels in a header — query strings land in logs
+  const token = typeof req.headers["x-cmvng-owner-token"] === "string" ? req.headers["x-cmvng-owner-token"] : null;
   let body = null;
   if (req.method === "POST") {
     let raw;
     try {
       raw = await readBody(req, PLANS_BODY_LIMIT);
     } catch (e) {
-      return writeJson(e.status || 400, { error: e.status === 413 ? "Plan config too large." : "Could not read request body." });
+      if (e.status === 413) {
+        // the client may still be mid-upload: answer first, then close the
+        // connection only after the 413 has flushed so it is actually seen
+        res.writeHead(413, {
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "no-store",
+          "Connection": "close",
+        });
+        res.end(JSON.stringify({ error: "Plan config too large." }), () => req.socket.destroy());
+        return;
+      }
+      return writeJson(400, { error: "Could not read request body." });
     }
     try {
       body = JSON.parse(raw || "null");
@@ -105,7 +140,7 @@ async function servePlans(req, res, url) {
       return writeJson(400, { error: "Request body must be valid JSON." });
     }
   }
-  const out = handlePlansRequest({ method: req.method, url, body, ip });
+  const out = handlePlansRequest({ method: req.method, url, body, ip, token });
   writeJson(out.status, out.body);
 }
 
