@@ -95,12 +95,12 @@ export default function CoinSelector({ coins, selected, onSelect, market }) {
         </div>
       )}
 
-      {/* quick filters */}
-      <div role="group" aria-label="Quick filters" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+      {/* quick filters — one scrollable row; wrapping pushes the coin list below the fold on phones */}
+      <div role="group" aria-label="Quick filters" style={{ display: "flex", gap: 8, flexWrap: "nowrap", overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "none", msOverflowStyle: "none", padding: "2px 2px 6px", marginBottom: 8 }}>
         {FILTERS.map(f => (
           <button key={f.id} onClick={() => { setFilter(f.id); setDropOpen(true); }}
             aria-pressed={filter === f.id}
-            style={chip(filter === f.id)}>
+            style={{ ...chip(filter === f.id), flexShrink: 0, whiteSpace: "nowrap" }}>
             {f.label}
           </button>
         ))}

@@ -2,7 +2,7 @@
 // A soft inset: eyebrow label over one friendly line of tabular figures.
 
 import React from "react";
-import { T, body, monoFigure, pillSoft } from "../styles/theme.js";
+import { T, SANS, body, monoFigure, pillSoft } from "../styles/theme.js";
 import { SectionLabel } from "./ui.jsx";
 import { buildSchedule, validateCapital } from "../lib/simulation/dca.js";
 import { fmtUSD, fmtUSDPrecise } from "../lib/formatting/money.js";
@@ -29,6 +29,11 @@ export default function SchedulePreview({ selected, capital, freqId, months, tar
           ? "Mode: historical backtest — real past prices, real dates."
           : <>Target scenario: <span style={{ ...pillSoft, fontVariantNumeric: "tabular-nums" }}>+{targetPct}%</span> (your chosen test case, not a forecast)</>}
       </div>
+      {!selected && (
+        <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 500, color: T.ink3, marginTop: 8 }}>
+          Pick a coin above to run this schedule.
+        </div>
+      )}
     </div>
   );
 }

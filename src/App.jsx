@@ -23,6 +23,7 @@ import { useMarketData } from "./hooks/useMarketData.js";
 import { useSimulation } from "./hooks/useSimulation.js";
 import { useSavedPlans } from "./hooks/useSavedPlans.js";
 import { getFreq, validateCapital } from "./lib/simulation/dca.js";
+import { fmtDate } from "./lib/formatting/dates.js";
 import { decodePlanFromHash } from "./lib/planUrl.js";
 import { fetchPlan, revokePlan, getToken } from "./lib/planApi.js";
 import { track } from "./lib/analytics.js";
@@ -67,6 +68,7 @@ export default function App() {
   const publicMode = !!(publicRecord && typeof publicRecord === "object");
 
   const shareRef = useRef(null);
+  const step2Ref = useRef(null);
   const resultsRef = useRef(null);
   const prevSimState = useRef(simApi.simState);
   const freq = getFreq(freqId);
@@ -226,6 +228,10 @@ export default function App() {
   };
 
   const scrollToShare = () => shareRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const scrollToPlan = () => step2Ref.current?.scrollIntoView({
+    block: "start",
+    behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+  });
 
   const showSticky = simApi.simState === "done" && (simApi.sim || simApi.backtestResult);
   const canSimulate = selected && market.history && capitalOk && simApi.simState !== "running"
@@ -243,7 +249,7 @@ export default function App() {
       {showSticky && (
         <div style={{
           position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100,
-          maxWidth: 640, margin: "0 auto",
+          maxWidth: 680, margin: "0 auto",
           background: T.card, borderRadius: "20px 20px 0 0",
           boxShadow: "0 -10px 30px -14px rgba(30,60,120,0.35)",
           padding: "12px 16px", display: "flex", gap: 10, alignItems: "stretch",
@@ -253,15 +259,17 @@ export default function App() {
               Share your plan
             </button>
           )}
-          <button onClick={handleSim} disabled={simApi.simState === "running"} style={{ ...btnSecondary, flex: 1 }}>
-            Recalculate
-          </button>
+          {!publicMode && (
+            <button onClick={scrollToPlan} style={{ ...btnSecondary, flex: 1 }}>
+              Edit plan
+            </button>
+          )}
         </div>
       )}
 
       <Header onOpenSaved={() => setShowSaved(v => !v)} savedCount={saved.plans.length} />
 
-      <main style={{ maxWidth: 640, margin: "0 auto", padding: "32px 16px" }}>
+      <main style={{ maxWidth: 680, margin: "0 auto", padding: "32px 16px" }}>
 
         {sharedBanner && (
           <div role="status" style={{ background: T.blueSoft, borderRadius: 16, padding: "12px 16px", marginBottom: 16, ...body, color: T.blue, fontWeight: 600 }}>
@@ -344,8 +352,9 @@ export default function App() {
         </Section>
         )}
 
-        {/* STEP 2 — plan */}
+        {/* STEP 2 — plan · step2Ref is the "Edit plan" scroll target */}
         {!publicMode && (
+        <div ref={step2Ref}>
         <Section label="Step 2 · Build your plan" eyebrow ariaLabel="Step 2: build your plan">
           <CapitalInput capital={capital} onChange={setCapital} />
           <FrequencySelector freqId={freqId} months={safeMo} onChange={setFreqId} />
@@ -383,7 +392,9 @@ export default function App() {
                 <select id="bt-start" value={backtestOffsetMonths} onChange={e => setBacktestOffsetMonths(Number(e.target.value))}
                   style={{ width: "100%", padding: "12px 14px", borderRadius: 14, border: `1px solid ${T.line}`, background: T.card, fontSize: 15, fontFamily: SANS, fontWeight: 500, color: T.ink }}>
                   {backtestOptions.map(m => (
-                    <option key={m} value={m}>{m} month{m > 1 ? "s" : ""} ago</option>
+                    <option key={m} value={m}>
+                      {m} month{m > 1 ? "s" : ""} ago · {fmtDate(Date.now() - m * 30 * 86400000)}
+                    </option>
                   ))}
                 </select>
               )}
@@ -392,6 +403,7 @@ export default function App() {
 
           <SchedulePreview selected={selected} capital={config.capital} freqId={freqId} months={safeMo} targetPct={targetPct} mode={mode} />
         </Section>
+        </div>
         )}
 
         {/* simulate — the primary action, always visible so step 2 never dead-ends */}
@@ -431,14 +443,26 @@ export default function App() {
             targetPct={targetPct}
             shareRef={shareRef}
             shareSlot={
-              <Suspense fallback={null}>
-                <SharePanel
-                  selected={selected} sim={simView} targetPct={targetPct} months={safeMo}
-                  freqLabel={freq.label} analysis={market.analysis} livePrice={market.live}
-                  onSavePlan={handleSavePlan} planSaved={planSaved}
-                  onNewPlan={resetAll} onCompareCoin={compareCoin}
-                />
-              </Suspense>
+              publicMode ? (
+                /* /plan/<id> visitors never see owner controls (name, save, publish) */
+                <Section ariaLabel="Build your own plan">
+                  <div style={{ ...body, marginBottom: 14 }}>
+                    Like this plan? Build your own in about a minute.
+                  </div>
+                  <button onClick={exitPublicMode} style={btnPrimary}>
+                    Build your own plan
+                  </button>
+                </Section>
+              ) : (
+                <Suspense fallback={null}>
+                  <SharePanel
+                    selected={selected} sim={simView} targetPct={targetPct} months={safeMo}
+                    freqLabel={freq.label} analysis={market.analysis} livePrice={market.live}
+                    onSavePlan={handleSavePlan} planSaved={planSaved}
+                    onNewPlan={resetAll} onCompareCoin={compareCoin}
+                  />
+                </Suspense>
+              )
             }
           />
         )}
