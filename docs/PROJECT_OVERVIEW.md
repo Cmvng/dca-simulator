@@ -3,7 +3,7 @@
 CMVNG is a crypto DCA decision engine with two deliberately separate product paths:
 
 - **Established-asset planner** at `/` and `/plan/<id>`: time-scheduled DCA scenarios, historical backtests, comparisons, saving, tracking, and sharing.
-- **Contract analyzer** at `/contract`: exact onchain pool discovery, real OHLCV, market-data gates, and a price-triggered staggered buy ladder.
+- **Contract analyzer** at `/contract`: exact onchain pool discovery, real OHLCV, market-data gates, and a scheduled-DCA simulation with an explicitly illustrative sample path.
 
 Neither path predicts future candles or certifies a token as safe.
 
@@ -37,7 +37,7 @@ src/
   App.jsx                  Established-asset orchestration
   components/
     OnchainAnalyzer.jsx    Contract workflow and risk/plan presentation
-    DcaChart.jsx           Real candlesticks, volume, plan references, a11y
+    ScheduledDcaChart.jsx  History context, illustrative sample candles, a11y
     results/               Established-asset results surfaces
   hooks/                   Established-asset request and simulation state
   services/
@@ -45,7 +45,7 @@ src/
     onchainApi.js          Contract and candle client
   lib/
     simulation/            Behavior-locked CMVNG Simulation v3
-    onchain/               Onchain ladder v1 and formatters
+    onchain/               Scheduled-DCA engine, evidence gates, formatters
     sharing/               Share-card rendering
     planApi.js             Public-plan client
     savedPlans.js          Local saved/tracked plans
@@ -77,21 +77,18 @@ Public `/plan/<id>` pages, hash `#p=` shares, local plans, cards, tracking, and 
 3. The response retains network, pool, token side, DEX, counter token, market snapshot, alternatives, provider, and resolution time.
 4. `/api/candles` validates network/pool/token/timeframe parameters, asks GeckoTerminal for token-oriented OHLCV, verifies pool metadata, and returns sorted unique valid candles.
 5. On a pool or timeframe change, prior candles and plan output are cleared; aborted or stale requests cannot replace the selected context.
-6. Onchain ladder v1 either blocks weak evidence or creates four descending ranges with 15/20/25/40 percent budget allocation.
-7. The chart draws only returned historical candles plus shaded `B1`–`B4` conditional-buy bands, weighted entry, the `S1` goal, and invalidation. The candle series' autoscale provider merges plan extrema without adding fake or crosshair-active price series.
-8. The adjacent execution map repeats every trigger, allocation, price range, and the selected review window in text so the chart is actionable and accessible without implying future price movement.
+6. The scheduled-DCA engine either blocks weak evidence or builds an exact end-exclusive purchase calendar with whole-cent budget allocation.
+7. The chart draws muted real-history candles plus a clearly separated illustrative sample path with `B` buy markers and the moving `S` target and `X` review levels.
+8. The plan summary repeats every amount, cadence, and level in text so the chart is actionable and accessible without implying future price movement.
 
 ## Onchain methodology and honesty rules
 
-- The ladder is price-triggered, not calendar DCA and not the established v3 simulator.
-- Repeated swing-low support requires at least two clustered historical touches.
-- A volatility-reference ladder requires at least 20 valid candles spanning at least 24 elapsed hours, reasonable interval coverage, and a fresh latest candle.
-- Support-based mode requires at least 30 valid candles, seven elapsed days in the selected chart interval, and two repeated support zones.
-- Fallbacks are labelled volatility references; they are never called structural support.
-- At least $10,000 pool liquidity and a reasonably aligned live quote/latest candle are required before any ladder is shown.
-- Confidence uses elapsed duration plus candle count, liquidity, volume, pool age, volatility, and quote/candle divergence.
-- Goal equals the selected gain percentage above simulated weighted average entry, exactly.
-- `B1` through `B4` are conditional buy triggers; `S1` is a conditional goal reference that applies after fills. The selected review window says when to reassess the evidence, not when price will arrive.
+- The scheduled flow is calendar DCA against one exact pool; it is not the established v3 simulator.
+- A simulation requires at least 20 valid candles spanning at least 24 elapsed hours, reasonable interval coverage, and a fresh latest candle.
+- At least $10,000 pool liquidity and a reasonably aligned live quote/latest candle are required before any simulation is shown.
+- Confidence uses elapsed duration plus candle count, liquidity, volume, pool age, volatility, and quote/candle divergence, all measured against the pinned evidence capture time.
+- The sample path is a seeded bootstrap of centered historical return shapes, labelled illustrative and never a forecast.
+- The `S` target equals the selected gain percentage above the running average entry, exactly; `S` and `X` closes stop only future simulated buys and never model a sale.
 - Missing market cap, FDV, change, or transaction data remains unavailable rather than becoming zero or borrowing another field.
 - Market-data confidence says nothing about honeypots, taxes, authorities, holders, deployer behavior, LP state, or sellability.
 - No executable quote is requested yet; displayed levels exclude real price impact, routing, tax, gas, and slippage.
@@ -130,4 +127,4 @@ On narrow screens, DOM and visual order both remain chart-first: token context a
 
 The implementation baseline is complete, but trustworthy public launch still requires contract-security enrichment, independent sell simulation, executable size-aware quotes, abuse protection, and cross-pool divergence rules. See `docs/RECOMMENDATIONS.md` for the ordered backlog.
 
-*Updated 2026-08-30 for CMVNG Simulation v3.0.0 and the Onchain ladder v1 execution-map release.*
+*Updated 2026-09-01 for CMVNG Simulation v3.0.0 and the scheduled-DCA contract analyzer (the legacy zone-ladder engine and its components have been removed).*

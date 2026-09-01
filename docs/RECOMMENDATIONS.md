@@ -29,7 +29,7 @@ Priorities use P0 (required before any trade-ready CTA), P1 (high-value product 
 - [x] Live console review found Lightweight Charts `unexpected base`; [PR #7](https://github.com/Cmvng/dca-simulator/pull/7) fixed it with an explicit `1e18` price-format base plus a smoke regression and merged at `dd24717efac45163e78aa8ae17aac4fb1e11fd05`. Railway deployment `a5d32f46-606d-4fec-bcc6-e2ee49b9e284` reached `SUCCESS`.
 - [x] Fresh-tab Price, FDV, and MCAP retests had zero app-origin console errors. The root route also loaded with zero app-origin errors.
 
-The earlier `B1`-`B4` pullback-zone profiles are historical work, not part of the primary scheduled-DCA result. Keep them only as a separately labelled future advanced mode if user research proves they add value without restoring the previous complexity.
+The earlier `B1`-`B4` pullback-zone profiles are historical work whose code has been deleted from the repository. Reintroduce anything similar only as a separately labelled future advanced mode if user research proves it adds value without restoring the previous complexity.
 
 ## Post-release verification status
 
@@ -57,7 +57,7 @@ The earlier `B1`-`B4` pullback-zone profiles are historical work, not part of th
 - Model fees, gas, taxes, slippage, failed transactions, and price impact from executable quotes before showing net accumulation or net target outcomes.
 - Validate the illustration with many seeds and strict out-of-sample backtests before adding ranges, success rates, probabilities, or “expected” outcomes. Never infer confidence from the one displayed seed.
 - Add automated visual-regression coverage for the contract flow and both card formats once browser execution is available in CI.
-- If retained, expose the legacy `B1`-`B4` zone ladder only behind a clearly named Advanced strategy view with separate methodology and warnings; never mix it into the primary scheduled plan.
+- The legacy `B1`-`B4` zone ladder has been deleted; if it is ever rebuilt, expose it only behind a clearly named Advanced strategy view with separate methodology and warnings, never mixed into the primary scheduled plan.
 
 ## P2 — advanced intelligence
 
@@ -87,4 +87,4 @@ Keep the provider adapter so the product can start keyless and graduate without 
 - Presenting the bright seeded path as a forecast, prediction, expected return, probability, or complete risk distribution.
 - Treating MCAP, FDV, and price as interchangeable; valuation views remain implied from current provider ratios.
 - Copying holder P&L lists or trading-app social features from the visual reference.
-- Returning the legacy `B1`-`B4` zone ladder to the primary contract flow.
+- Rebuilding the deleted legacy `B1`-`B4` zone ladder inside the primary contract flow.

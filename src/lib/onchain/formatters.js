@@ -10,8 +10,8 @@ export function formatUsd(value, { compact = false } = {}) {
   if (compact && absolute >= 1_000) return `${sign}$${(absolute / 1_000).toFixed(1)}K`;
 
   return `${sign}$${absolute.toLocaleString("en-US", {
-    minimumFractionDigits: absolute < 1 ? 2 : 0,
-    maximumFractionDigits: absolute < 1 ? 2 : 2,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   })}`;
 }
 
@@ -20,7 +20,7 @@ export function formatPrice(value) {
   if (!Number.isFinite(number) || number <= 0) return "—";
   if (number >= 1_000) return `$${number.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
   if (number >= 1) return `$${number.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}`;
-  if (number >= 0.01) return `$${number.toFixed(6).replace(/0+$/, "")}`;
+  if (number >= 0.01) return `$${number.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")}`;
   if (number < 1e-18) return `$${number.toExponential(4)}`;
 
   const exponent = Math.floor(Math.log10(number));

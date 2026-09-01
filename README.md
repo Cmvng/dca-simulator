@@ -37,7 +37,7 @@ That live pass exposed a Lightweight Charts `unexpected base` console error. PR 
 - Request IDs plus cancellation prevent stale responses. Address, pool, evidence interval, amount, duration, frequency, target, and value-unit URL state make a complete plan refreshable and shareable.
 - Pool identity, evidence quality, methodology, warnings, and safety limitations remain available under one collapsed “How this was calculated, pool and safety” section.
 
-The former primary `B1`–`B4` price-zone/profile studio has been removed from the main contract experience. Its ladder code is retained only as a possible future advanced strategy and must not be mixed into the simple scheduled-DCA flow without separately labelled assumptions and tests.
+The former primary `B1`–`B4` price-zone/profile studio and its ladder engine, components, and tests have been deleted; only the shared evidence helpers (candle normalization, market-data gates, valuation ratios) that the scheduled flow consumes remain. A future advanced strategy would need its own separately labelled assumptions and tests.
 
 ### Top 250 decision engine
 
@@ -77,7 +77,7 @@ The browser harnesses use `CHROME_PATH` when Chromium is installed outside the d
 | Contract flow | `src/components/OnchainAnalyzer.jsx` | Exact-address resolution, pool/candle requests, simple plan inputs, quality states, URL persistence, and progressive disclosure. |
 | Scheduled chart and summary | `src/components/ScheduledDcaChart.jsx`, `src/components/ScheduledPlanSummary.jsx` | Real-history context, illustrative sample candles, scheduled markers, moving levels, valuation modes, accessible buy data, and plain-language outcomes. |
 | Scheduled onchain engine | `src/lib/onchain/scheduledDca.js` | Exact calendar/cent allocation, realized volatility, deterministic seed, illustrative sample, simulated buys, moving target/review levels, and terminal-event logic. |
-| Shared onchain evidence | `src/lib/onchain/dcaEngine.js` | Candle normalization, ATR and market-data quality gates, plus valuation-ratio helpers reused by scheduled DCA. Legacy zone-profile calculations remain non-primary. |
+| Shared onchain evidence | `src/lib/onchain/dcaEngine.js` | Candle normalization, ATR and market-data quality gates, plus valuation-ratio helpers reused by scheduled DCA. |
 | Contract share cards | `src/components/OnchainSharePanel.jsx`, `src/lib/sharing/onchainShareModel.js`, `src/lib/sharing/onchainShareCard.js` | Scheduled-plan card UI, normalized model, and square/story PNG rendering. |
 | Onchain routes | `api/token.js`, `api/candles.js`, `api/_onchain.js` | Exact pool discovery, normalized OHLCV, validation, caching, and provider-error handling. |
 | Established-asset app | `src/App.jsx`, `src/components/`, `src/hooks/` | Existing plan builder, results, retention, sharing, and public-plan experience. |

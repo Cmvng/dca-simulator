@@ -410,7 +410,7 @@ test("the first target close stops later buys and leaves the unspent cents unuse
     totalUsd: 700,
     frequencyId: "daily",
     durationDays: 7,
-    targetPct: 1,
+    targetPct: 5,
     expectedIntervalSeconds: 86_400,
     seed: 0,
   }));
@@ -439,7 +439,7 @@ test("the first volatility review close also stops later buys without modeling a
     totalUsd: 700,
     frequencyId: "daily",
     durationDays: 7,
-    targetPct: 1,
+    targetPct: 5,
     expectedIntervalSeconds: 86_400,
     seed: 3,
   }));
@@ -535,10 +535,10 @@ test("existing market-data gates still block weak pools, with schedule-first wor
 });
 
 test("target and duration inputs are rejected plainly instead of silently changed", () => {
-  for (const targetPct of [0, 1_001, NaN]) {
+  for (const targetPct of [0, 4, 501, NaN]) {
     const plan = buildScheduledDcaPlan(planArgs({ targetPct }));
     assert.equal(plan.canSimulate, false);
-    assert.ok(plan.blockingReasons.some(reason => /Target must be/i.test(reason)));
+    assert.ok(plan.blockingReasons.some(reason => /Target must be from \+5% to \+500%/i.test(reason)));
   }
   const duration = buildScheduledDcaPlan(planArgs({ durationDays: 91 }));
   assert.equal(duration.canSimulate, false);

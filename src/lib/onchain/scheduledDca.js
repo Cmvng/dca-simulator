@@ -10,8 +10,10 @@ const DAY_SECONDS = 86_400;
 const YEAR_DAYS = 365;
 const MIN_DURATION_DAYS = 7;
 const MAX_DURATION_DAYS = 90;
-const MIN_TARGET_PCT = 1;
-const MAX_TARGET_PCT = 1_000;
+// Matches the product form's declared min/max (OnchainAnalyzer target input),
+// so the engine's validation message never advertises an unreachable range.
+const MIN_TARGET_PCT = 5;
+const MAX_TARGET_PCT = 500;
 const MAX_TOTAL_USD = 10_000_000;
 const MIN_REVIEW_LOG_MOVE = -Math.log(0.97);
 const MAX_REVIEW_LOG_MOVE = -Math.log(0.10);

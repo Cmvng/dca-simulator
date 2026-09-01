@@ -23,7 +23,7 @@ The current primary path is:
 
 **contract address → measured volatility → amount/frequency/duration/target → one simulated chart → plain summary → share card**
 
-The former Deep pullback/Balanced/Early entry selector, `B1`–`B4` price-zone rail, `S1`/`X1` outcome grid, timeframe toolbar, and retrospective-touch controls are no longer part of the primary UI. The old ladder code remains in the repository only as a possible future advanced strategy; it is not mixed into the scheduled plan.
+The former Deep pullback/Balanced/Early entry selector, `B1`–`B4` price-zone rail, `S1`/`X1` outcome grid, timeframe toolbar, and retrospective-touch controls are no longer part of the primary UI. The old ladder code has since been deleted from the repository; only the shared evidence helpers the scheduled plan consumes remain.
 
 ## Delivered in the simple scheduled-DCA redesign
 
