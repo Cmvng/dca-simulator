@@ -154,18 +154,23 @@ function estimatedSchedule({ totalUsd, durationDays, frequencyId }) {
   };
 }
 
-function volatilityLabel(plan, candleLoading) {
-  if (candleLoading) return { category: "Calculating", measure: "—", detail: "Reading recent price swings" };
+function volatilityLabel(plan, candleState) {
+  if (candleState === "idle" || candleState === "loading") {
+    return { category: "Calculating", measure: "—", detail: "Reading recent price swings" };
+  }
+  if (candleState === "error") {
+    // A failed candle fetch says nothing about the token's history — label it
+    // as a data problem, never as a verdict on the token.
+    return { category: "Unavailable", measure: "—", detail: "Market data could not be loaded" };
+  }
   const volatility = plan?.volatility;
-  if (!volatility) return { category: "Unavailable", measure: "—", detail: "Not enough usable market history" };
+  if (!volatility || volatility.ok === false || !finiteNumber(volatility.typicalDailySwingPct)) {
+    return { category: "Unavailable", measure: "—", detail: "Not enough usable market history" };
+  }
   return {
     category: volatility.category || "Measured",
-    measure: finiteNumber(volatility.typicalDailySwingPct)
-      ? `~${Number(volatility.typicalDailySwingPct).toFixed(1)}% daily`
-      : "Measured",
-    detail: finiteNumber(volatility.typicalDailySwingPct)
-      ? `Typical daily swing ${Number(volatility.typicalDailySwingPct).toFixed(1)}%`
-      : "Based on recent pool candles",
+    measure: `~${Number(volatility.typicalDailySwingPct).toFixed(1)}% daily`,
+    detail: `Typical daily swing ${Number(volatility.typicalDailySwingPct).toFixed(1)}%`,
   };
 }
 
@@ -210,6 +215,9 @@ export default function OnchainAnalyzer() {
   const workspaceRef = useRef(null);
   const planResultRef = useRef(null);
   const technicalDetailsRef = useRef(null);
+  const planBuilderRef = useRef(null);
+  const resolveErrorRef = useRef(null);
+  const candleErrorRef = useRef(null);
   const pendingPlanFocus = useRef(false);
 
   const timeframe = useMemo(
@@ -253,7 +261,16 @@ export default function OnchainAnalyzer() {
     }),
     [amountInput, durationInput, frequencyInput],
   );
-  const volatility = volatilityLabel(scheduledPlan, candleLoading);
+  const draftEstimateText = `About ${draftEstimate.purchaseCount} buys of ${formatUsd(draftEstimate.amountPerBuyUsd)} · ${draftEstimate.frequencyLabel.toLowerCase()}`;
+  // Screen readers get the preview only once typing settles; the visible
+  // preview stays immediate.
+  const [announcedEstimate, setAnnouncedEstimate] = useState(draftEstimateText);
+  useEffect(() => {
+    if (announcedEstimate === draftEstimateText) return undefined;
+    const timer = window.setTimeout(() => setAnnouncedEstimate(draftEstimateText), 800);
+    return () => window.clearTimeout(timer);
+  }, [announcedEstimate, draftEstimateText]);
+  const volatility = volatilityLabel(scheduledPlan, candleState);
   const selectedNetwork = NETWORK_NAMES[asset?.network] || asset?.network || "Unknown network";
   const dexName = typeof asset?.dex === "string" ? asset.dex : asset?.dex?.name || asset?.dex?.id || "Unknown DEX";
   const selectedPoolKey = asset ? `${asset.network}:${asset.poolAddress}` : "";
@@ -279,18 +296,31 @@ export default function OnchainAnalyzer() {
   }, [asset, market.fdvUsd, market.marketCapUsd, valueMode]);
 
   useEffect(() => {
-    const canonicalAddress = asset?.token?.address
-      || (["loading", "error"].includes(resolveState) ? address.trim() : "");
-    if (!canonicalAddress) return;
-    if (resolveState === "idle" && initialQuery.address === address) return;
+    // Sync the URL only after a successful resolve. While a resolve is loading
+    // or errored the existing params — including a deep-linked pool — stay
+    // untouched, so a transient provider failure or a half-typed address never
+    // rewrites or strips the shared link.
+    if (resolveState !== "done" || !asset?.token?.address) return;
     syncAnalyzerUrl({
-      address: canonicalAddress,
+      address: asset.token.address,
       asset,
       inputs: planInputs,
       valueMode,
       timeframeId: timeframe.id,
     });
-  }, [address, asset, initialQuery.address, planInputs, resolveState, timeframe.id, valueMode]);
+  }, [asset, planInputs, resolveState, timeframe.id, valueMode]);
+
+  useEffect(() => {
+    // Failed resolves and candle loads move keyboard focus to the error
+    // message; the disabled submit button would otherwise drop focus to body.
+    if (resolveState !== "error") return;
+    resolveErrorRef.current?.focus();
+  }, [resolveState]);
+
+  useEffect(() => {
+    if (candleState !== "error") return;
+    candleErrorRef.current?.focus();
+  }, [candleState]);
 
   useEffect(() => {
     if (!canShowPlan || !pendingPlanFocus.current) return;
@@ -459,13 +489,21 @@ export default function OnchainAnalyzer() {
       setCandlesAt(null);
       setCandleError("");
       setCandleState("loading");
+      // The submit button disables during the reload; park focus on the plan
+      // builder so keyboard focus is never dropped to <body>.
+      planBuilderRef.current?.focus({ preventScroll: true });
     }
   };
 
   const openTechnicalDetails = () => {
-    if (!technicalDetailsRef.current) return;
-    technicalDetailsRef.current.open = true;
-    technicalDetailsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    const details = technicalDetailsRef.current;
+    if (!details) return;
+    details.open = true;
+    // Move keyboard focus with the scroll: to the pool select when it is
+    // usable, otherwise to the disclosure summary.
+    const focusTarget = details.querySelector("#pool-source:not(:disabled)") || details.querySelector("summary");
+    focusTarget?.focus({ preventScroll: true });
+    details.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const quality = scheduledPlan?.quality || {};
@@ -521,13 +559,19 @@ export default function OnchainAnalyzer() {
             )}
           </form>
 
-          {resolveError && <div className="inline-alert inline-alert--danger" role="alert">{resolveError}</div>}
+          {resolveError && (
+            <div className="inline-alert inline-alert--danger" role="alert" ref={resolveErrorRef} tabIndex={-1}>
+              {resolveError}
+            </div>
+          )}
           <div className="visually-hidden" role="status" aria-live="polite">
             {resolveState === "loading"
               ? "Resolving the contract and exact pools."
-              : canShowPlan
-                ? `Plan ready: ${generatedSchedule?.purchaseCount || 0} planned buys, ${generatedFrequency?.label?.toLowerCase() || "on schedule"}, over ${generatedSchedule?.durationDays || planInputs.durationDays} days.`
-                : ""}
+              : candleState === "loading"
+                ? "Reading market volatility to build the plan."
+                : canShowPlan
+                  ? `Plan ready: ${generatedSchedule?.purchaseCount || 0} planned buys, ${generatedFrequency?.label?.toLowerCase() || "on schedule"}, over ${generatedSchedule?.durationDays || planInputs.durationDays} days.`
+                  : ""}
           </div>
         </section>
 
@@ -588,7 +632,7 @@ export default function OnchainAnalyzer() {
               </div>
             )}
 
-            <section className="simple-plan-builder" id="plan-builder" aria-labelledby="plan-builder-title">
+            <section className="simple-plan-builder" id="plan-builder" ref={planBuilderRef} tabIndex={-1} aria-labelledby="plan-builder-title">
               <header>
                 <span>Build your plan</span>
                 <h3 id="plan-builder-title">Tell us how you want to DCA</h3>
@@ -647,18 +691,21 @@ export default function OnchainAnalyzer() {
                   </label>
                 </div>
 
-                <div className="simple-plan-builder__preview" aria-live="polite">
+                <div className="simple-plan-builder__preview">
                   <span>Plan preview</span>
-                  <strong>About {draftEstimate.purchaseCount} buys of {formatUsd(draftEstimate.amountPerBuyUsd)} · {draftEstimate.frequencyLabel.toLowerCase()}</strong>
+                  <strong>{draftEstimateText}</strong>
                 </div>
+                <span className="visually-hidden" aria-live="polite">Plan preview: {announcedEstimate}</span>
 
                 <button className="simple-plan-builder__submit" type="submit" disabled={candleLoading}>
-                  {candleLoading ? "Reading market volatility…" : canShowPlan ? "Update DCA plan" : "Generate DCA plan"}
+                  {candleLoading
+                    ? <><span className="button-spinner" aria-hidden="true" /> Reading market volatility…</>
+                    : canShowPlan ? "Update DCA plan" : "Generate DCA plan"}
                 </button>
               </form>
 
               {candleState === "error" && (
-                <div className="gate-box gate-box--blocked" role="alert">
+                <div className="gate-box gate-box--blocked" role="alert" ref={candleErrorRef} tabIndex={-1}>
                   <strong>Market chart could not be loaded</strong>
                   <p>{candleError}</p>
                   <button type="button" onClick={retryCandles}>Try again</button>

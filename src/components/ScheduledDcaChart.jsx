@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useId, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   CandlestickSeries,
   ColorType,
@@ -20,6 +20,14 @@ const VALUE_MODE_LABELS = {
   fdv: "FDV",
 };
 const MAX_VISUAL_BUY_MARKERS = 48;
+const MIN_VISUAL_BUY_MARKERS = 6;
+// Labeled markers need ~48px apiece to stay legible; bare dots manage with ~18px.
+const LABELED_MARKER_PX = 48;
+const DOT_MARKER_PX = 18;
+// Below this plot width the B×n text labels overlap into a smudge, so markers
+// render as dots and the accessible buys table stays the itemized record.
+const MARKER_LABEL_MIN_PLOT_PX = 520;
+const PRICE_SCALE_MIN_PX = 76;
 const MAX_ACCESSIBLE_BUYS = 100;
 const PRICE_FORMAT_BASE = 1e18;
 const PRICE_FORMAT_MIN_MOVE = 1 / PRICE_FORMAT_BASE;
@@ -30,8 +38,12 @@ const COLORS = {
   grid: "rgba(117, 133, 164, 0.10)",
   text: "#F8FAFF",
   muted: "#929BB0",
-  historyUp: "#436854",
-  historyDown: "#734A4D",
+  // History stays desaturated next to the vivid sample palette, but both
+  // directions clear WCAG 1.4.11's 3:1 floor against the #060914 panel
+  // (up 5.78:1, down 3.42:1) and differ in luminance (1.69:1, lighter up /
+  // darker down) so direction is not encoded by hue alone.
+  historyUp: "#699478",
+  historyDown: "#8F555A",
   sampleUp: "#22C76A",
   sampleDown: "#FF6249",
   buy: "#21D66F",
@@ -171,47 +183,59 @@ function terminalEventFrom(plan) {
   return plan?.terminalEvent ?? plan?.scenario?.terminalEvent ?? null;
 }
 
-function nearestSeriesTime(time, candles) {
-  if (!candles.length || time === null) return null;
-  let best = candles[0].time;
-  let distance = Math.abs(best - time);
-  for (let index = 1; index < candles.length; index += 1) {
-    const nextDistance = Math.abs(candles[index].time - time);
-    if (nextDistance < distance) {
-      best = candles[index].time;
-      distance = nextDistance;
-    }
-  }
-  return best;
+function buildTimeIndex(candles) {
+  const times = candles.map(candle => candle.time);
+  return { times, byTime: new Set(times) };
 }
 
-function groupBuyMarkers(buys, candles) {
-  if (!buys.length || !candles.length) return [];
-  const groupSize = Math.max(1, Math.ceil(buys.length / MAX_VISUAL_BUY_MARKERS));
+// Buy times come from the same scenario clock as the candles, so the common
+// case is an O(1) exact hit; the O(log n) binary search covers the rest. The
+// previous per-marker linear scan was O(buys × candles) and stalled dense
+// hourly plans on every value-unit toggle.
+function nearestSeriesTime(time, index) {
+  const { times, byTime } = index;
+  if (time === null || !times.length) return null;
+  if (byTime.has(time)) return time;
+  let low = 0;
+  let high = times.length - 1;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (times[mid] < time) low = mid + 1;
+    else high = mid;
+  }
+  const after = times[low];
+  const before = low > 0 ? times[low - 1] : null;
+  return before !== null && Math.abs(time - before) <= Math.abs(after - time) ? before : after;
+}
+
+function groupBuyMarkers(buys, index, budget, withLabels) {
+  if (!buys.length || !index.times.length) return [];
+  const groupSize = Math.max(1, Math.ceil(buys.length / Math.max(1, budget)));
   const markers = [];
   for (let start = 0; start < buys.length; start += groupSize) {
     const group = buys.slice(start, start + groupSize);
     const representative = group.at(-1);
-    const time = nearestSeriesTime(representative.time, candles);
+    const time = nearestSeriesTime(representative.time, index);
     if (time === null) continue;
-    markers.push({
+    const marker = {
       time,
       position: "belowBar",
       color: COLORS.buy,
       shape: "circle",
-      text: group.length === 1 ? "B" : `B×${group.length}`,
       size: group.length === 1 ? 1.5 : 1.7,
-    });
+    };
+    if (withLabels) marker.text = group.length === 1 ? "B" : `B×${group.length}`;
+    markers.push(marker);
   }
   return markers;
 }
 
-function eventMarker(plan, candles) {
+function eventMarker(plan, index) {
   const event = terminalEventFrom(plan);
   const type = terminalType(plan);
   const time = nearestSeriesTime(
     normalizeTime(event?.triggerCandleTime ?? event?.time ?? event?.timestamp ?? event?.date),
-    candles,
+    index,
   );
   if (time === null) return null;
   if (type.includes("target") || type.includes("profit")) {
@@ -237,23 +261,30 @@ function eventMarker(plan, candles) {
   return null;
 }
 
-function steppedLevelData(buys, key, multiplier, sampleCandles, terminal) {
+// Computed from unscaled USD values so value-unit toggles only re-run the cheap
+// multiply in scaleLevelPoints, never the time matching.
+function steppedLevelData(buys, key, sampleCandles, sampleIndex, terminal) {
   const points = buys.flatMap(buy => {
-    const time = nearestSeriesTime(buy.time, sampleCandles);
+    const time = nearestSeriesTime(buy.time, sampleIndex);
     const value = firstFinite(buy?.[key]);
-    return time !== null && value > 0 ? [{ time, value: value * multiplier }] : [];
+    return time !== null && value > 0 ? [{ time, value }] : [];
   });
   if (!points.length || !sampleCandles.length) return points;
 
   const terminalTime = nearestSeriesTime(
     normalizeTime(terminal?.time ?? terminal?.triggerCandleTime),
-    sampleCandles,
+    sampleIndex,
   );
   const finalTime = terminalTime ?? sampleCandles.at(-1).time;
   if (finalTime > points.at(-1).time) {
     points.push({ time: finalTime, value: points.at(-1).value });
   }
   return points;
+}
+
+function scaleLevelPoints(points, multiplier) {
+  if (multiplier === 1) return points;
+  return points.map(point => ({ time: point.time, value: point.value * multiplier }));
 }
 
 function dateTime(value) {
@@ -281,10 +312,16 @@ const chartCss = `
   .cmvng-scheduled-chart__head {
     align-items: flex-start;
     display: flex;
+    flex-wrap: wrap;
     gap: 14px;
     justify-content: space-between;
     min-height: 76px;
     padding: 16px 18px 12px;
+  }
+  .cmvng-scheduled-chart__controls {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 8px;
   }
   .cmvng-scheduled-chart__eyebrow {
     color: ${COLORS.buy};
@@ -322,10 +359,19 @@ const chartCss = `
     min-height: 44px;
     padding: 0 14px;
   }
+  .cmvng-scheduled-chart__fit--icon {
+    font-size: 17px;
+    min-width: 44px;
+    padding: 0;
+  }
   .cmvng-scheduled-chart__fit:focus-visible,
   .cmvng-scheduled-chart summary:focus-visible {
     outline: 3px solid #83AEFF;
     outline-offset: 2px;
+  }
+  .cmvng-scheduled-chart__canvas:focus-visible {
+    outline: 3px solid #83AEFF;
+    outline-offset: -3px;
   }
   .cmvng-scheduled-chart__legend {
     align-items: center;
@@ -435,6 +481,7 @@ export default function ScheduledDcaChart({
   const targetSeriesRef = useRef(null);
   const reviewSeriesRef = useRef(null);
   const markerPluginRef = useRef(null);
+  const [stageWidth, setStageWidth] = useState(null);
 
   const history = useMemo(() => normalizeCandles(historyCandles), [historyCandles]);
   const rawSample = useMemo(() => scenarioCandlesFrom(plan), [plan]);
@@ -467,29 +514,61 @@ export default function ScheduledDcaChart({
     })),
     [multiplier, rawBuys],
   );
-  const markerSeriesCandles = scaledSample.length ? scaledSample : scaledHistory;
+  // Marker density budgets follow the measured plot width so dense schedules
+  // stay individually distinguishable on phones instead of smearing into a band.
+  const plotWidth = Math.max(120, (stageWidth ?? 720) - PRICE_SCALE_MIN_PX);
+  const showMarkerLabels = plotWidth >= MARKER_LABEL_MIN_PLOT_PX;
+  const markerBudget = Math.max(
+    MIN_VISUAL_BUY_MARKERS,
+    Math.min(
+      MAX_VISUAL_BUY_MARKERS,
+      Math.floor(plotWidth / (showMarkerLabels ? LABELED_MARKER_PX : DOT_MARKER_PX)),
+    ),
+  );
+  // Marker and level times never change with the value unit, so both are
+  // matched against unscaled candles and reused across Price/MCAP/FDV toggles.
+  const markerCandles = sample.length ? sample : history;
+  const markerIndex = useMemo(() => buildTimeIndex(markerCandles), [markerCandles]);
+  const sampleIndex = useMemo(() => buildTimeIndex(sample), [sample]);
+  const buyMarkers = useMemo(
+    () => groupBuyMarkers(rawBuys, markerIndex, markerBudget, showMarkerLabels),
+    [markerBudget, markerIndex, rawBuys, showMarkerLabels],
+  );
   const markers = useMemo(() => {
-    const visual = groupBuyMarkers(scaledBuys, markerSeriesCandles);
-    const terminal = eventMarker(plan, markerSeriesCandles);
-    if (terminal) visual.push(terminal);
-    return visual.sort((left, right) => left.time - right.time);
-  }, [markerSeriesCandles, plan, scaledBuys]);
+    const terminalMarker = eventMarker(plan, markerIndex);
+    const visual = terminalMarker ? [...buyMarkers, terminalMarker] : buyMarkers;
+    return [...visual].sort((left, right) => left.time - right.time);
+  }, [buyMarkers, markerIndex, plan]);
   const terminal = terminalEventFrom(plan);
+  const averageStepsBase = useMemo(
+    () => steppedLevelData(rawBuys, "averageEntryUsd", sample, sampleIndex, terminal),
+    [rawBuys, sample, sampleIndex, terminal],
+  );
+  const targetStepsBase = useMemo(
+    () => steppedLevelData(rawBuys, "targetPriceUsd", sample, sampleIndex, terminal),
+    [rawBuys, sample, sampleIndex, terminal],
+  );
+  const reviewStepsBase = useMemo(
+    () => steppedLevelData(rawBuys, "reviewPriceUsd", sample, sampleIndex, terminal),
+    [rawBuys, sample, sampleIndex, terminal],
+  );
   const averageSteps = useMemo(
-    () => steppedLevelData(rawBuys, "averageEntryUsd", multiplier, sample, terminal),
-    [multiplier, rawBuys, sample, terminal],
+    () => scaleLevelPoints(averageStepsBase, multiplier),
+    [averageStepsBase, multiplier],
   );
   const targetSteps = useMemo(
-    () => steppedLevelData(rawBuys, "targetPriceUsd", multiplier, sample, terminal),
-    [multiplier, rawBuys, sample, terminal],
+    () => scaleLevelPoints(targetStepsBase, multiplier),
+    [multiplier, targetStepsBase],
   );
   const reviewSteps = useMemo(
-    () => steppedLevelData(rawBuys, "reviewPriceUsd", multiplier, sample, terminal),
-    [multiplier, rawBuys, sample, terminal],
+    () => scaleLevelPoints(reviewStepsBase, multiplier),
+    [multiplier, reviewStepsBase],
   );
-  const terminalLabel = terminalType(plan).includes("target") || terminalType(plan).includes("profit")
+  const terminalIsTarget = terminalType(plan).includes("target") || terminalType(plan).includes("profit");
+  const terminalIsReview = terminalType(plan).includes("risk") || terminalType(plan).includes("review");
+  const terminalLabel = terminalIsTarget
     ? "A sample candle closed at the conditional profit target; no sale is modeled"
-    : terminalType(plan).includes("risk") || terminalType(plan).includes("review")
+    : terminalIsReview
       ? "A sample candle closed at the risk-review level; no sale is modeled"
       : "No conditional target or review level was reached in the sample";
 
@@ -501,6 +580,37 @@ export default function ScheduledDcaChart({
   const fitChart = useCallback(() => {
     chartRef.current?.timeScale().fitContent();
   }, []);
+
+  // Keyboard-operable equivalents of the pointer-only wheel/drag/pinch
+  // gestures (WCAG 2.1.1): the header buttons plus key handling on the stage.
+  const zoomChart = useCallback(zoomIn => {
+    const timeScale = chartRef.current?.timeScale();
+    const range = timeScale?.getVisibleLogicalRange();
+    if (!range) return;
+    const span = Math.max(1, range.to - range.from);
+    const nextSpan = zoomIn ? Math.max(3, span / 1.5) : span * 1.5;
+    const center = (range.from + range.to) / 2;
+    timeScale.setVisibleLogicalRange({ from: center - nextSpan / 2, to: center + nextSpan / 2 });
+  }, []);
+
+  const panChart = useCallback(direction => {
+    const timeScale = chartRef.current?.timeScale();
+    const range = timeScale?.getVisibleLogicalRange();
+    if (!range) return;
+    const shift = Math.max(1, (range.to - range.from) * 0.25) * direction;
+    timeScale.setVisibleLogicalRange({ from: range.from + shift, to: range.to + shift });
+  }, []);
+
+  const onChartKeyDown = useCallback(event => {
+    const { key } = event;
+    if (key === "+" || key === "=") zoomChart(true);
+    else if (key === "-" || key === "_") zoomChart(false);
+    else if (key === "ArrowLeft") panChart(-1);
+    else if (key === "ArrowRight") panChart(1);
+    else if (key === "Home") fitChart();
+    else return;
+    event.preventDefault();
+  }, [fitChart, panChart, zoomChart]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -529,7 +639,10 @@ export default function ScheduledDcaChart({
         barSpacing: 7,
         borderColor: COLORS.border,
         lockVisibleTimeRangeOnResize: true,
-        minBarSpacing: 1,
+        // Fractional so fitContent can truly fit dense hourly plans (up to
+        // ~2,700 bars) inside a phone-width pane instead of silently cropping
+        // the plan and all history to the last few days.
+        minBarSpacing: 0.05,
         rightOffset: 5,
         secondsVisible: false,
         timeVisible: true,
@@ -618,7 +731,17 @@ export default function ScheduledDcaChart({
     const onDoubleClick = () => chart.timeScale().fitContent();
     chart.subscribeDblClick(onDoubleClick);
 
+    let stageObserver = null;
+    if (typeof ResizeObserver !== "undefined") {
+      stageObserver = new ResizeObserver(entries => {
+        const width = entries.at(-1)?.contentRect?.width;
+        if (Number.isFinite(width) && width > 0) setStageWidth(width);
+      });
+      stageObserver.observe(container);
+    }
+
     return () => {
+      stageObserver?.disconnect();
       chart.unsubscribeDblClick(onDoubleClick);
       markerPlugin.detach();
       chart.remove();
@@ -659,16 +782,24 @@ export default function ScheduledDcaChart({
     averageSeries.setData(averageSteps);
     targetSeries.setData(targetSteps);
     reviewSeries.setData(reviewSteps);
-    markerPluginRef.current?.setMarkers(markers);
     chartRef.current?.timeScale().fitContent();
-  }, [averageSteps, formatter, markers, reviewSteps, scaledHistory, scaledSample, targetSteps]);
+  }, [averageSteps, formatter, reviewSteps, scaledHistory, scaledSample, targetSteps]);
+
+  // Markers change with plot width too (grouping budget, labels); applying
+  // them separately avoids re-running setData + fitContent on width changes.
+  useEffect(() => {
+    markerPluginRef.current?.setMarkers(markers);
+  }, [markers]);
 
   const hasChartData = scaledHistory.length > 0 || scaledSample.length > 0;
   const accessibleBuys = scaledBuys.slice(0, MAX_ACCESSIBLE_BUYS);
   const hiddenBuyCount = Math.max(0, scaledBuys.length - accessibleBuys.length);
   const plannedBuyCount = Math.max(0, Number(plan?.schedule?.purchaseCount) || 0);
   const stoppedBuyCount = Math.max(0, plannedBuyCount - scaledBuys.length);
-  const visualBuyMarkerCount = markers.filter(marker => String(marker.text).startsWith("B")).length;
+  const visualBuyMarkerCount = buyMarkers.length;
+  const markerNote = showMarkerLabels
+    ? "B times a number means that many buys"
+    : "each green dot can stand for several buys, and the buys table below lists every one";
   const symbol = String(tokenSymbol || "TOKEN").toUpperCase();
   const displayedModeLabel = activeMode === "price"
     ? VALUE_MODE_LABELS[activeMode]
@@ -696,9 +827,27 @@ export default function ScheduledDcaChart({
             {valueModeFallback && ` ${VALUE_MODE_LABELS[requestedMode]} was unavailable, so Price is shown.`}
           </p>
         </div>
-        <button className="cmvng-scheduled-chart__fit" type="button" onClick={fitChart}>
-          Fit chart
-        </button>
+        <div className="cmvng-scheduled-chart__controls" role="group" aria-label="Chart view controls">
+          <button
+            className="cmvng-scheduled-chart__fit cmvng-scheduled-chart__fit--icon"
+            type="button"
+            onClick={() => zoomChart(false)}
+            aria-label="Zoom out"
+          >
+            −
+          </button>
+          <button
+            className="cmvng-scheduled-chart__fit cmvng-scheduled-chart__fit--icon"
+            type="button"
+            onClick={() => zoomChart(true)}
+            aria-label="Zoom in"
+          >
+            +
+          </button>
+          <button className="cmvng-scheduled-chart__fit" type="button" onClick={fitChart}>
+            Fit chart
+          </button>
+        </div>
       </header>
 
       <div className="cmvng-scheduled-chart__legend" aria-label="Chart legend">
@@ -715,8 +864,10 @@ export default function ScheduledDcaChart({
           className="cmvng-scheduled-chart__canvas"
           ref={containerRef}
           role="img"
+          tabIndex={0}
+          onKeyDown={onChartKeyDown}
           aria-label={hasChartData
-            ? `${symbol} DCA simulation chart. ${scaledBuys.length} simulated purchases are grouped into ${visualBuyMarkerCount} visual buy markers; B times a number means that many buys. ${terminalLabel}.`
+            ? `${symbol} DCA simulation chart. ${scaledBuys.length} simulated purchases are grouped into ${visualBuyMarkerCount} visual buy markers; ${markerNote}. ${terminalLabel}. Press plus or minus to zoom, left and right arrows to pan, and Home to fit the whole plan.`
             : `${symbol} DCA chart. Generate a plan to display scheduled buys.`}
         />
         {!hasChartData && (
@@ -732,10 +883,14 @@ export default function ScheduledDcaChart({
           <div className="cmvng-scheduled-chart__details-body">
             <p>
               Intended schedule: {plannedBuyCount.toLocaleString("en-US")} buys. This sample reached {scaledBuys.length.toLocaleString("en-US")} simulated buys
-              {stoppedBuyCount > 0 ? ` and stopped ${stoppedBuyCount.toLocaleString("en-US")} later buys for review` : ""}.
+              {stoppedBuyCount > 0
+                ? ` and stopped ${stoppedBuyCount.toLocaleString("en-US")} later buys ${terminalIsTarget ? "after the target close" : "for review"}`
+                : ""}.
               {" "}{terminalLabel}. A target or review marker appears only when that level is crossed in this sample.
               {terminal?.time ? ` Sample event: ${dateTime(terminal.time)}.` : ""}
-              {visualBuyMarkerCount < scaledBuys.length ? " Grouped B×n markers keep dense schedules readable." : ""}
+              {visualBuyMarkerCount < scaledBuys.length
+                ? ` Grouped ${showMarkerLabels ? "B×n" : "buy"} markers keep dense schedules readable.`
+                : ""}
             </p>
             {accessibleBuys.length > 0 ? (
               <table className="cmvng-scheduled-chart__table">
@@ -756,7 +911,9 @@ export default function ScheduledDcaChart({
             ) : (
               <p>No sample purchases were reached before the review point.</p>
             )}
-            {hiddenBuyCount > 0 && <p>Plus {hiddenBuyCount} more scheduled buys.</p>}
+            {hiddenBuyCount > 0 && (
+              <p>Plus {hiddenBuyCount.toLocaleString("en-US")} more simulated buys not listed here.</p>
+            )}
           </div>
         </details>
       )}

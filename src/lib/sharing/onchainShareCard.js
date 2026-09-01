@@ -12,6 +12,10 @@ export { buildOnchainShareModel, ONCHAIN_CARD_FORMATS, ONCHAIN_VALUE_MODES } fro
 const SANS = "'Plus Jakarta Sans', Arial, sans-serif";
 const font = (size, weight = 500) => `${weight} ${size}px ${SANS}`;
 
+// Live deployment URL until the custom domain is set (owner request) —
+// mirrors shareCard.js so the eventual domain flip touches both pipelines.
+export const ONCHAIN_APP_DOMAIN = "web-production-84b5c.up.railway.app";
+
 function roundRect(ctx, x, y, width, height, radius) {
   const r = Math.min(radius, width / 2, height / 2);
   ctx.beginPath();
@@ -146,7 +150,8 @@ function selectedValue(model, values) {
 }
 
 function plainPercent(value, digits = 1) {
-  if (!Number.isFinite(Number(value))) return "Unavailable";
+  // null/"" coerce to 0 through Number(); a missing figure must never print 0%
+  if (value === null || value === "" || !Number.isFinite(Number(value))) return "Unavailable";
   return `${Math.abs(Number(value)).toFixed(digits).replace(/\.0$/, "")}%`;
 }
 
@@ -186,8 +191,13 @@ function drawHeader(ctx, model, image, { x, y, width, scale }) {
   drawToken(ctx, image, model.token.symbol, x, y, tokenSize);
 
   ctx.fillStyle = T.ink;
-  ctx.font = font(29 * scale, 700);
-  ctx.fillText(model.token.symbol, x + 86 * scale, y + 28 * scale);
+  // Provider symbols are arbitrary-length strings — fit then truncate against
+  // the same 250·scale reservation the identity line uses, so a long symbol
+  // never overprints the right-aligned wordmark or runs off the card.
+  const symbolMaxWidth = width - 250 * scale;
+  const symbolSize = fitText(ctx, model.token.symbol, symbolMaxWidth, 29 * scale, 700, 18 * scale);
+  ctx.font = font(symbolSize, 700);
+  ctx.fillText(truncateText(ctx, model.token.symbol, symbolMaxWidth), x + 86 * scale, y + 28 * scale);
   ctx.fillStyle = T.ink2;
   const identity = `${model.token.network.toUpperCase()} · CA ${compactAddress(model.token.address, 8, 7)}`;
   ctx.font = font(13 * scale, 600);
@@ -205,10 +215,14 @@ function drawHeader(ctx, model, image, { x, y, width, scale }) {
 
 function drawHero(ctx, model, { x, y, width, scale }) {
   fillRoundRect(ctx, x, y, width, 154 * scale, 24 * scale, T.card2);
-  fillRoundRect(ctx, x + 18 * scale, y + 16 * scale, 250 * scale, 30 * scale, 15 * scale, T.blueSoft);
-  ctx.fillStyle = T.blue;
+  // Size the pill from the measured badge text (whatever font actually
+  // resolved), so the honesty disclaimer never spills past its background.
+  const badge = "ILLUSTRATIVE SIMULATION · NOT A FORECAST";
   ctx.font = font(11 * scale, 700);
-  ctx.fillText("ILLUSTRATIVE SIMULATION · NOT A FORECAST", x + 31 * scale, y + 36 * scale);
+  const badgeWidth = Math.min(ctx.measureText(badge).width + 26 * scale, width - 36 * scale);
+  fillRoundRect(ctx, x + 18 * scale, y + 16 * scale, badgeWidth, 30 * scale, 15 * scale, T.blueSoft);
+  ctx.fillStyle = T.blue;
+  ctx.fillText(truncateText(ctx, badge, badgeWidth - 26 * scale), x + 31 * scale, y + 36 * scale);
 
   ctx.fillStyle = T.ink;
   ctx.font = font(34 * scale, 700);
@@ -231,7 +245,12 @@ function drawVolatility(ctx, model, { x, y, width, scale }) {
   ctx.fillText("HISTORICAL VOLATILITY", x + 18 * scale, y + 27 * scale);
   ctx.fillStyle = T.ink;
   ctx.font = font(21 * scale, 700);
-  ctx.fillText(`${model.volatilityTier} · ${plainPercent(model.dailySwingPct)} typical daily swing`, x + 18 * scale, y + 58 * scale);
+  // No daily-swing figure means exactly that — never a converted annualized
+  // number dressed up as one.
+  const swing = Number.isFinite(model.dailySwingPct)
+    ? `${plainPercent(model.dailySwingPct)} typical daily swing`
+    : "typical daily swing unavailable";
+  ctx.fillText(truncateText(ctx, `${model.volatilityTier} · ${swing}`, width - 36 * scale), x + 18 * scale, y + 58 * scale);
 }
 
 function drawFactGrid(ctx, model, { x, y, width, scale, columns = 2 }) {
@@ -302,10 +321,20 @@ function drawFooter(ctx, model, { x, y, width, scale, expanded = false }) {
   }
   if (model.warnings.length) rows.push(`DATA NOTE · ${model.warnings.join(" · ")}`);
 
+  // App URL in blue on the first footer line, matching the classic card's
+  // footer, so a reposted PNG still points viewers at the live tool.
+  ctx.font = font(9.5 * scale, 700);
+  const domainWidth = ctx.measureText(ONCHAIN_APP_DOMAIN).width;
+  ctx.fillStyle = T.blue;
+  ctx.textAlign = "right";
+  ctx.fillText(ONCHAIN_APP_DOMAIN, x + width, y + 20 * scale);
+  ctx.textAlign = "left";
+
   rows.forEach((row, index) => {
+    const maxWidth = index === 0 ? width - domainWidth - 16 * scale : width;
     ctx.fillStyle = index === 3 ? T.ink2 : T.ink3;
     ctx.font = font((index === 3 ? 9.5 : 9) * scale, index === 3 ? 700 : 600);
-    ctx.fillText(truncateText(ctx, row, width), x, y + (20 + index * 14) * scale);
+    ctx.fillText(truncateText(ctx, row, maxWidth), x, y + (20 + index * 14) * scale);
   });
 }
 
@@ -346,6 +375,13 @@ export async function makeOnchainShareCard(input) {
       "A risk review pauses the sample; it is not an automatic sale or stop order.",
     ].forEach((line, index) => ctx.fillText(line, x, 1432 + index * 28));
     drawFooter(ctx, model, { x, y: 1655, width, scale: 1.12, expanded: true });
+
+    // Build-your-own CTA on the tall format, mirroring the classic story card
+    ctx.fillStyle = T.blue;
+    ctx.font = font(15, 700);
+    ctx.textAlign = "center";
+    ctx.fillText(`Build your own plan · ${ONCHAIN_APP_DOMAIN}`, canvas.width / 2, 1856);
+    ctx.textAlign = "left";
   } else {
     const x = 72;
     const width = canvas.width - 144;

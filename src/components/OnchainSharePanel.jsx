@@ -252,7 +252,19 @@ export default function OnchainSharePanel({
   if (!model) return null;
 
   const filename = safeFilename(model.token.symbol, format);
-  const currentShareUrl = () => shareUrl || (typeof window !== "undefined" ? window.location.href : "");
+  const currentShareUrl = () => {
+    const base = shareUrl || (typeof window !== "undefined" ? window.location.href : "");
+    // Carry the panel's own value-unit selection in the link so the page a
+    // recipient opens shows the same levels the card prints — the page URL
+    // only tracks the chart's unit, which can differ from the card's.
+    try {
+      const url = new URL(base);
+      url.searchParams.set("unit", resolvedValueMode);
+      return url.toString();
+    } catch {
+      return base;
+    }
+  };
 
   const generate = async () => {
     if (generating) return;

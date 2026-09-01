@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { buildOnchainShareModel } from "./onchainShareModel.js";
 
 const asset = {
@@ -139,6 +141,41 @@ test("buildOnchainShareModel accepts hourly plans without capping the buy count"
   assert.equal(model.plannedBuyCount, 2_160);
   assert.equal(model.buyFrequencyLabel, "Every hour");
   assert.equal(model.durationDays, 90);
+});
+
+test("buildOnchainShareModel never passes annualized or log-sigma volatility off as a daily swing", () => {
+  // annualizedPct is ~19x a daily figure and dailyPct is a log-return sigma;
+  // neither may reach the card's "typical daily swing" caption.
+  const annualizedOnly = buildOnchainShareModel({
+    asset,
+    plan: { ...plan, volatility: { annualizedPct: 57.4, category: "Moderate" } },
+  });
+  assert.equal(annualizedOnly.dailySwingPct, null);
+  assert.equal(annualizedOnly.volatilityTier, "Moderate");
+
+  const logSigmaOnly = buildOnchainShareModel({
+    asset,
+    plan: { ...plan, volatility: { dailyPct: 7.2, category: "Moderate" } },
+  });
+  assert.equal(logSigmaOnly.dailySwingPct, null);
+
+  // genuine daily-swing aliases still win, in order
+  const genuine = buildOnchainShareModel({
+    asset,
+    plan: { ...plan, volatility: { annualizedPct: 57.4, typicalDailySwingPct: 3.1 } },
+  });
+  assert.equal(genuine.dailySwingPct, 3.1);
+});
+
+test("both share-card pipelines print the same live app domain", () => {
+  // The deployment URL is temporary (until cmvng.app lands); the domain flip
+  // must touch the classic and onchain cards together, so pin the literal.
+  const here = dir => fileURLToPath(new URL(dir, import.meta.url));
+  const onchainSource = readFileSync(here("./onchainShareCard.js"), "utf8");
+  const classicSource = readFileSync(here("./shareCard.js"), "utf8");
+  const domain = "web-production-84b5c.up.railway.app";
+  assert.ok(onchainSource.includes(`export const ONCHAIN_APP_DOMAIN = "${domain}"`));
+  assert.ok(classicSource.includes(`"${domain}"`));
 });
 
 test("buildOnchainShareModel rejects blocked or incomplete simulations", () => {

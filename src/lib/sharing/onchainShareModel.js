@@ -197,12 +197,14 @@ export function buildOnchainShareModel({
   const profitTargetPrice = pointPrice(targetPoint) || firstPositive(plan.targetPrice);
   const riskReviewPrice = pointPrice(reviewPoint) || firstPositive(plan.reviewPrice, plan.invalidationPrice);
   const volatility = plan.volatility || {};
+  // Only genuine daily-swing aliases may feed the "typical daily swing"
+  // caption: dailyPct is a log-return sigma and annualizedPct is ~19x a
+  // daily figure, so substituting either would overstate the swing on a
+  // card built for reposting. A missing value renders as unavailable.
   const dailySwingPct = firstFinite(
     volatility.dailySwingPct,
     volatility.typicalDailySwingPct,
     volatility.expectedDailySwingPct,
-    volatility.dailyPct,
-    volatility.annualizedPct,
     plan.dailySwingPct,
   );
   const volatilityTier = firstText(
